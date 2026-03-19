@@ -7,14 +7,13 @@ from io import StringIO
 from pathlib import Path
 
 from expense_tracker.cli import main
-from expense_tracker.tracker import ExpenseTracker
 
 
 class ExpenseTrackerCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        self.data_file = Path(self.temp_dir.name) / "expenses.json"
+        self.data_file = Path(self.temp_dir.name) / "ledger.json"
 
     def run_cli(self, *args: str) -> str:
         buffer = StringIO()
@@ -23,63 +22,91 @@ class ExpenseTrackerCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         return buffer.getvalue().strip()
 
-    def test_add_and_list_expenses(self) -> None:
+    def test_add_and_list_transactions(self) -> None:
         add_output = self.run_cli(
             "add",
-            "--description",
-            "Coffee",
-            "--amount",
-            "4.50",
+            "--account",
+            "Cash",
+            "--payee",
+            "Amazon",
             "--category",
-            "Food",
+            "General",
+            "--subcategory",
+            "Delivery",
+            "--amount",
+            "14.50",
             "--date",
             "2026-03-10",
+            "--notes",
+            "Order #1",
         )
-        self.assertIn("Added expense", add_output)
+        self.assertIn("Added transaction", add_output)
 
         list_output = self.run_cli("list")
-        self.assertIn("Coffee", list_output)
-        self.assertIn("$4.50", list_output)
-        self.assertIn("Total: $4.50", list_output)
+        self.assertIn("Cash", list_output)
+        self.assertIn("Amazon", list_output)
+        self.assertIn("Delivery", list_output)
+        self.assertIn("Order #1", list_output)
+        self.assertIn("Net total: $-14.50", list_output)
 
-    def test_summary_groups_by_category(self) -> None:
-        tracker = ExpenseTracker(self.data_file)
-        tracker.add_expense(
-            description="Groceries",
-            amount="12.20",
-            category="Food",
-            spent_on="2026-03-01",
+    def test_summary_shows_account_balances(self) -> None:
+        self.run_cli(
+            "add",
+            "--account",
+            "Cash",
+            "--payee",
+            "Employer",
+            "--category",
+            "Income",
+            "--subcategory",
+            "Salary",
+            "--amount",
+            "1000.00",
+            "--type",
+            "income",
+            "--date",
+            "2026-03-01",
         )
-        tracker.add_expense(
-            description="Train ticket",
-            amount="8.00",
-            category="Travel",
-            spent_on="2026-03-02",
-        )
-        tracker.add_expense(
-            description="Lunch",
-            amount="5.80",
-            category="Food",
-            spent_on="2026-03-03",
+        self.run_cli(
+            "add",
+            "--account",
+            "Cash",
+            "--payee",
+            "Shop 1",
+            "--category",
+            "General",
+            "--subcategory",
+            "Grocery",
+            "--amount",
+            "120.00",
+            "--date",
+            "2026-03-02",
         )
 
         summary_output = self.run_cli("summary")
-        self.assertIn("- Food: $18.00", summary_output)
-        self.assertIn("- Travel: $8.00", summary_output)
-        self.assertIn("Grand total: $26.00", summary_output)
+        self.assertIn("- Cash: $880.00", summary_output)
+        self.assertIn("- General: $-120.00", summary_output)
+        self.assertIn("- Income: $1000.00", summary_output)
 
-    def test_delete_removes_an_expense(self) -> None:
-        tracker = ExpenseTracker(self.data_file)
-        expense = tracker.add_expense(
-            description="Movie ticket",
-            amount="14.00",
-            category="Fun",
-            spent_on="2026-03-05",
+    def test_delete_removes_transaction(self) -> None:
+        add_output = self.run_cli(
+            "add",
+            "--account",
+            "Cash",
+            "--payee",
+            "Cinema",
+            "--category",
+            "General",
+            "--amount",
+            "18.00",
+            "--date",
+            "2026-03-05",
         )
+        transaction_id = add_output.split()[2]
 
-        delete_output = self.run_cli("delete", expense.id)
-        self.assertEqual(delete_output, f"Deleted expense {expense.id}.")
-        self.assertEqual(self.run_cli("list"), "No expenses found.")
+        delete_output = self.run_cli("delete", transaction_id)
+        self.assertEqual(delete_output, f"Deleted transaction {transaction_id}.")
+        self.assertEqual(self.run_cli("list"), "No transactions found.")
 
 
 if __name__ == "__main__":

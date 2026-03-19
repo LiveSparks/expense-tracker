@@ -57,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     delete_parser.add_argument("transaction_id")
 
     subparsers.add_parser("tui", help="Launch the terminal UI.")
+    serve_parser = subparsers.add_parser("serve", help="Run the web UI and API server.")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
 
     return parser
 
@@ -66,6 +69,14 @@ def launch_tui(data_file: Path) -> None:
 
     app = ExpenseTrackerApp(data_file)
     app.run()
+
+
+def launch_web(data_file: Path, host: str, port: int) -> None:
+    import uvicorn
+
+    from .web import create_app
+
+    uvicorn.run(create_app(data_file), host=host, port=port)
 
 
 def render_transactions(transactions: list[TransactionRecord], total: Decimal) -> str:
@@ -169,6 +180,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "tui":
             launch_tui(args.data_file)
+            return 0
+
+        if args.command == "serve":
+            launch_web(args.data_file, args.host, args.port)
             return 0
     except ValueError as exc:
         parser.error(str(exc))

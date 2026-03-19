@@ -30,22 +30,38 @@ class ExpenseTracker:
         changed = self._ensure_account_payees(ledger)
         if changed:
             self.storage.save(ledger)
-        category_map = {category.id: category.name for category in ledger.categories}
-        subcategories_by_category: dict[str, list[str]] = {
-            category.name: [] for category in ledger.categories
-        }
-        for subcategory in sorted(ledger.subcategories, key=lambda item: item.name.casefold()):
-            category_name = category_map.get(subcategory.category_id)
-            if category_name is None:
-                continue
-            subcategories_by_category.setdefault(category_name, []).append(subcategory.name)
+        return self._metadata_snapshot_from_ledger(ledger)
 
-        return MetadataSnapshot(
-            accounts=sorted((account.name for account in ledger.accounts), key=str.casefold),
-            payees=sorted((payee.name for payee in ledger.payees), key=str.casefold),
-            categories=sorted((category.name for category in ledger.categories), key=str.casefold),
-            subcategories_by_category=subcategories_by_category,
-        )
+    def account_summaries(self) -> list[dict[str, str]]:
+        balances = self.account_balances()
+        return [{"name": name, "balance": f"{balance:.2f}"} for name, balance in balances.items()]
+
+    def payee_summaries(self) -> list[dict[str, str | None]]:
+        ledger = self.storage.load()
+        account_map = {account.id: account.name for account in ledger.accounts}
+        return [
+            {
+                "name": payee.name,
+                "linked_account_name": account_map.get(payee.linked_account_id)
+                if payee.linked_account_id is not None
+                else None,
+            }
+            for payee in sorted(ledger.payees, key=lambda item: item.name.casefold())
+        ]
+
+    def category_summaries(self) -> list[dict[str, object]]:
+        metadata = self.metadata_snapshot()
+        return [
+            {"name": category, "subcategories": metadata.subcategories_by_category.get(category, [])}
+            for category in metadata.categories
+        ]
+
+    def get_transaction(self, transaction_id: str) -> TransactionRecord | None:
+        ledger = self.storage.load()
+        target = next((item for item in ledger.transactions if item.id == transaction_id), None)
+        if target is None:
+            return None
+        return self._build_record(ledger, target)
 
     def add_transaction(
         self,
@@ -60,115 +76,58 @@ class ExpenseTracker:
         attachment_paths: Sequence[str] | None = None,
     ) -> list[TransactionRecord]:
         ledger = self.storage.load()
-        account = self._get_or_create_account(ledger, account_name)
-        payee = self._get_or_create_payee(ledger, payee_name)
-        created_at = datetime.now(UTC)
-        parsed_amount = self._parse_signed_amount(amount)
-        parsed_date = self._parse_date(spent_on)
-        normalized_notes = notes.strip()
-
-        if payee.linked_account_id == account.id:
-            raise ValueError("Source and destination accounts must be different.")
-
-        created_transactions: list[Transaction] = []
-        if payee.linked_account_id is not None:
-            transfer_category = self._get_or_create_category(ledger, "Transfers")
-            transfer_subcategory = self._get_or_create_subcategory(
-                ledger,
-                "Transfer",
-                transfer_category.id,
-            )
-            transfer_amount = abs(parsed_amount)
-            transfer_group_id = str(uuid4())
-            source_transaction = Transaction(
-                id=str(uuid4()),
-                entry_type="transfer_out",
-                account_id=account.id,
-                payee_id=payee.id,
-                category_id=transfer_category.id,
-                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
-                amount=-transfer_amount,
-                notes=normalized_notes,
-                spent_on=parsed_date,
-                created_at=created_at,
-                transfer_group_id=transfer_group_id,
-            )
-            destination_account = self._require_account(ledger, payee.linked_account_id)
-            source_account_payee = self._ensure_linked_payee(ledger, account)
-            destination_transaction = Transaction(
-                id=str(uuid4()),
-                entry_type="transfer_in",
-                account_id=destination_account.id,
-                payee_id=source_account_payee.id,
-                category_id=transfer_category.id,
-                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
-                amount=transfer_amount,
-                notes=normalized_notes,
-                spent_on=parsed_date,
-                created_at=created_at,
-                transfer_group_id=transfer_group_id,
-            )
-            source_transaction.linked_transaction_id = destination_transaction.id
-            destination_transaction.linked_transaction_id = source_transaction.id
-            ledger.transactions.extend([source_transaction, destination_transaction])
-            created_transactions.extend([source_transaction, destination_transaction])
-        else:
-            category = self._get_or_create_category(ledger, category_name)
-            subcategory = self._get_or_create_subcategory(
-                ledger,
-                subcategory_name,
-                category.id,
-            )
-            entry_type = "income" if parsed_amount > Decimal("0.00") else "expense"
-            transaction = Transaction(
-                id=str(uuid4()),
-                entry_type=entry_type,
-                account_id=account.id,
-                payee_id=payee.id,
-                category_id=category.id,
-                subcategory_id=subcategory.id if subcategory is not None else None,
-                amount=parsed_amount,
-                notes=normalized_notes,
-                spent_on=parsed_date,
-                created_at=created_at,
-            )
-            ledger.transactions.append(transaction)
-            created_transactions.append(transaction)
-
-        if attachment_paths:
-            source_transaction = created_transactions[0]
-            for attachment_path in attachment_paths:
-                if not attachment_path.strip():
-                    continue
-                ledger.attachments.append(
-                    self._copy_attachment(
-                        source_transaction.id,
-                        Path(attachment_path.strip()),
-                        created_at,
-                    )
-                )
-
+        created = self._apply_transaction_change(
+            ledger,
+            original_transaction_id=None,
+            account_name=account_name,
+            payee_name=payee_name,
+            category_name=category_name,
+            subcategory_name=subcategory_name,
+            amount=amount,
+            spent_on=spent_on,
+            notes=notes,
+            attachment_paths=attachment_paths,
+        )
         self.storage.save(ledger)
-        return [self._build_record(ledger, item) for item in created_transactions]
+        return [self._build_record(ledger, item) for item in created]
+
+    def update_transaction(
+        self,
+        transaction_id: str,
+        *,
+        account_name: str,
+        payee_name: str,
+        category_name: str,
+        subcategory_name: str | None = None,
+        amount: str,
+        spent_on: str,
+        notes: str = "",
+        attachment_paths: Sequence[str] | None = None,
+    ) -> list[TransactionRecord]:
+        ledger = self.storage.load()
+        created = self._apply_transaction_change(
+            ledger,
+            original_transaction_id=transaction_id,
+            account_name=account_name,
+            payee_name=payee_name,
+            category_name=category_name,
+            subcategory_name=subcategory_name,
+            amount=amount,
+            spent_on=spent_on,
+            notes=notes,
+            attachment_paths=attachment_paths,
+        )
+        self.storage.save(ledger)
+        return [self._build_record(ledger, item) for item in created]
 
     def delete_transaction(self, transaction_id: str) -> bool:
         ledger = self.storage.load()
-        transaction_ids = {transaction_id}
-        target = next((item for item in ledger.transactions if item.id == transaction_id), None)
-        if target is None:
+        transaction_ids = self._transaction_group_ids(ledger, transaction_id)
+        if not transaction_ids:
             return False
-        if target.linked_transaction_id is not None:
-            transaction_ids.add(target.linked_transaction_id)
-
-        removed_attachments = [
-            attachment for attachment in ledger.attachments if attachment.transaction_id in transaction_ids
-        ]
-        ledger.transactions = [
-            transaction for transaction in ledger.transactions if transaction.id not in transaction_ids
-        ]
-        ledger.attachments = [
-            attachment for attachment in ledger.attachments if attachment.transaction_id not in transaction_ids
-        ]
+        removed_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id in transaction_ids]
+        ledger.transactions = [transaction for transaction in ledger.transactions if transaction.id not in transaction_ids]
+        ledger.attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id not in transaction_ids]
         for attachment in removed_attachments:
             attachment_file = Path(attachment.stored_path)
             if attachment_file.exists():
@@ -194,7 +153,6 @@ class ExpenseTracker:
         parsed_exact_date = self._parse_date(exact_date) if exact_date else None
         parsed_start_date = self._parse_date(start_date) if start_date else None
         parsed_end_date = self._parse_date(end_date) if end_date else None
-
         filtered: list[TransactionRecord] = []
         for record in records:
             if normalized_account and self._normalize(record.account_name) != normalized_account:
@@ -210,12 +168,7 @@ class ExpenseTracker:
             if parsed_end_date and record.spent_on > parsed_end_date:
                 continue
             filtered.append(record)
-
-        return sorted(
-            filtered,
-            key=lambda item: (item.spent_on, item.id),
-            reverse=True,
-        )
+        return sorted(filtered, key=lambda item: (item.spent_on, item.id), reverse=True)
 
     def account_balances(self) -> dict[str, Decimal]:
         ledger = self.storage.load()
@@ -258,27 +211,266 @@ class ExpenseTracker:
             total += transaction.amount
         return total
 
+    def create_account(self, name: str) -> None:
+        ledger = self.storage.load()
+        self._get_or_create_account(ledger, name)
+        self.storage.save(ledger)
+
+    def rename_account(self, current_name: str, new_name: str) -> None:
+        ledger = self.storage.load()
+        account = self._find_account_by_name(ledger, current_name)
+        if account is None:
+            raise ValueError("Account was not found.")
+        normalized_new_name = self._require_name(new_name, "Account")
+        if self._find_account_by_name(ledger, normalized_new_name) is not None:
+            raise ValueError("Account already exists.")
+        account.name = normalized_new_name
+        self._ensure_linked_payee(ledger, account)
+        self.storage.save(ledger)
+
+    def delete_account(self, name: str) -> None:
+        ledger = self.storage.load()
+        account = self._find_account_by_name(ledger, name)
+        if account is None:
+            raise ValueError("Account was not found.")
+        if any(transaction.account_id == account.id for transaction in ledger.transactions):
+            raise ValueError("Cannot delete an account that still has transactions.")
+        ledger.accounts = [item for item in ledger.accounts if item.id != account.id]
+        ledger.payees = [item for item in ledger.payees if item.linked_account_id != account.id]
+        self.storage.save(ledger)
+
+    def create_payee(self, name: str) -> None:
+        ledger = self.storage.load()
+        self._get_or_create_payee(ledger, name)
+        self.storage.save(ledger)
+
+    def rename_payee(self, current_name: str, new_name: str) -> None:
+        ledger = self.storage.load()
+        payee = self._find_payee_by_name(ledger, current_name)
+        if payee is None:
+            raise ValueError("Payee was not found.")
+        if payee.linked_account_id is not None:
+            raise ValueError("Linked account payees are managed through accounts.")
+        normalized_new_name = self._require_name(new_name, "Payee")
+        if self._find_payee_by_name(ledger, normalized_new_name) is not None:
+            raise ValueError("Payee already exists.")
+        payee.name = normalized_new_name
+        self.storage.save(ledger)
+
+    def delete_payee(self, name: str) -> None:
+        ledger = self.storage.load()
+        payee = self._find_payee_by_name(ledger, name)
+        if payee is None:
+            raise ValueError("Payee was not found.")
+        if payee.linked_account_id is not None:
+            raise ValueError("Linked account payees are managed through accounts.")
+        if any(transaction.payee_id == payee.id for transaction in ledger.transactions):
+            raise ValueError("Cannot delete a payee that still has transactions.")
+        ledger.payees = [item for item in ledger.payees if item.id != payee.id]
+        self.storage.save(ledger)
+
+    def create_category(self, name: str) -> None:
+        ledger = self.storage.load()
+        self._get_or_create_category(ledger, name)
+        self.storage.save(ledger)
+
+    def rename_category(self, current_name: str, new_name: str) -> None:
+        ledger = self.storage.load()
+        category = self._find_category_by_name(ledger, current_name)
+        if category is None:
+            raise ValueError("Category was not found.")
+        normalized_new_name = self._require_name(new_name, "Category")
+        if self._find_category_by_name(ledger, normalized_new_name) is not None:
+            raise ValueError("Category already exists.")
+        category.name = normalized_new_name
+        self.storage.save(ledger)
+
+    def delete_category(self, name: str) -> None:
+        ledger = self.storage.load()
+        category = self._find_category_by_name(ledger, name)
+        if category is None:
+            raise ValueError("Category was not found.")
+        if any(transaction.category_id == category.id for transaction in ledger.transactions):
+            raise ValueError("Cannot delete a category that still has transactions.")
+        if any(subcategory.category_id == category.id for subcategory in ledger.subcategories):
+            raise ValueError("Delete subcategories before deleting the category.")
+        ledger.categories = [item for item in ledger.categories if item.id != category.id]
+        self.storage.save(ledger)
+
+    def create_subcategory(self, category_name: str, subcategory_name: str) -> None:
+        ledger = self.storage.load()
+        category = self._get_or_create_category(ledger, category_name)
+        self._get_or_create_subcategory(ledger, subcategory_name, category.id)
+        self.storage.save(ledger)
+
+    def rename_subcategory(self, category_name: str, current_name: str, new_name: str) -> None:
+        ledger = self.storage.load()
+        category = self._find_category_by_name(ledger, category_name)
+        if category is None:
+            raise ValueError("Category was not found.")
+        subcategory = self._find_subcategory(ledger, category.id, current_name)
+        if subcategory is None:
+            raise ValueError("Subcategory was not found.")
+        normalized_new_name = self._require_name(new_name, "Subcategory")
+        if self._find_subcategory(ledger, category.id, normalized_new_name) is not None:
+            raise ValueError("Subcategory already exists in this category.")
+        subcategory.name = normalized_new_name
+        self.storage.save(ledger)
+
+    def delete_subcategory(self, category_name: str, subcategory_name: str) -> None:
+        ledger = self.storage.load()
+        category = self._find_category_by_name(ledger, category_name)
+        if category is None:
+            raise ValueError("Category was not found.")
+        subcategory = self._find_subcategory(ledger, category.id, subcategory_name)
+        if subcategory is None:
+            raise ValueError("Subcategory was not found.")
+        if any(transaction.subcategory_id == subcategory.id for transaction in ledger.transactions):
+            raise ValueError("Cannot delete a subcategory that still has transactions.")
+        ledger.subcategories = [item for item in ledger.subcategories if item.id != subcategory.id]
+        self.storage.save(ledger)
+
+    def _apply_transaction_change(
+        self,
+        ledger: LedgerData,
+        *,
+        original_transaction_id: str | None,
+        account_name: str,
+        payee_name: str,
+        category_name: str,
+        subcategory_name: str | None,
+        amount: str,
+        spent_on: str,
+        notes: str,
+        attachment_paths: Sequence[str] | None,
+    ) -> list[Transaction]:
+        existing_primary_attachments: list[Attachment] = []
+        primary_transaction_id = str(uuid4())
+        secondary_transaction_id: str | None = None
+        transfer_group_id: str | None = None
+
+        if original_transaction_id is not None:
+            target = next((item for item in ledger.transactions if item.id == original_transaction_id), None)
+            if target is None:
+                raise ValueError("Transaction was not found.")
+            linked_ids = self._transaction_group_ids(ledger, original_transaction_id)
+            primary_transaction_id = original_transaction_id
+            secondary_transaction_id = target.linked_transaction_id
+            transfer_group_id = target.transfer_group_id
+            existing_primary_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id == original_transaction_id]
+            removed_linked_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id in linked_ids and attachment.transaction_id != original_transaction_id]
+            for attachment in removed_linked_attachments:
+                attachment_file = Path(attachment.stored_path)
+                if attachment_file.exists():
+                    attachment_file.unlink()
+            ledger.attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id not in linked_ids or attachment.transaction_id == original_transaction_id]
+            ledger.transactions = [transaction for transaction in ledger.transactions if transaction.id not in linked_ids]
+
+        account = self._get_or_create_account(ledger, account_name)
+        payee = self._get_or_create_payee(ledger, payee_name)
+        created_at = datetime.now(UTC)
+        parsed_amount = self._parse_signed_amount(amount)
+        parsed_date = self._parse_date(spent_on)
+        normalized_notes = notes.strip()
+
+        if payee.linked_account_id == account.id:
+            raise ValueError("Source and destination accounts must be different.")
+
+        created_transactions: list[Transaction] = []
+        if payee.linked_account_id is not None:
+            transfer_category = self._get_or_create_category(ledger, "Transfers")
+            transfer_subcategory = self._get_or_create_subcategory(ledger, "Transfer", transfer_category.id)
+            transfer_amount = abs(parsed_amount)
+            transfer_group_id = transfer_group_id or str(uuid4())
+            secondary_transaction_id = secondary_transaction_id or str(uuid4())
+            source_transaction = Transaction(
+                id=primary_transaction_id,
+                entry_type="transfer_out",
+                account_id=account.id,
+                payee_id=payee.id,
+                category_id=transfer_category.id,
+                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
+                amount=-transfer_amount,
+                notes=normalized_notes,
+                spent_on=parsed_date,
+                created_at=created_at,
+                linked_transaction_id=secondary_transaction_id,
+                transfer_group_id=transfer_group_id,
+            )
+            destination_account = self._require_account(ledger, payee.linked_account_id)
+            source_account_payee = self._ensure_linked_payee(ledger, account)
+            destination_transaction = Transaction(
+                id=secondary_transaction_id,
+                entry_type="transfer_in",
+                account_id=destination_account.id,
+                payee_id=source_account_payee.id,
+                category_id=transfer_category.id,
+                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
+                amount=transfer_amount,
+                notes=normalized_notes,
+                spent_on=parsed_date,
+                created_at=created_at,
+                linked_transaction_id=primary_transaction_id,
+                transfer_group_id=transfer_group_id,
+            )
+            ledger.transactions.extend([source_transaction, destination_transaction])
+            created_transactions.extend([source_transaction, destination_transaction])
+        else:
+            category = self._get_or_create_category(ledger, category_name)
+            subcategory = self._get_or_create_subcategory(ledger, subcategory_name, category.id)
+            entry_type = "income" if parsed_amount > Decimal("0.00") else "expense"
+            transaction = Transaction(
+                id=primary_transaction_id,
+                entry_type=entry_type,
+                account_id=account.id,
+                payee_id=payee.id,
+                category_id=category.id,
+                subcategory_id=subcategory.id if subcategory is not None else None,
+                amount=parsed_amount,
+                notes=normalized_notes,
+                spent_on=parsed_date,
+                created_at=created_at,
+            )
+            ledger.transactions.append(transaction)
+            created_transactions.append(transaction)
+
+        if existing_primary_attachments:
+            ledger.attachments.extend(existing_primary_attachments)
+        if attachment_paths:
+            for attachment_path in attachment_paths:
+                if not attachment_path.strip():
+                    continue
+                ledger.attachments.append(self._copy_attachment(primary_transaction_id, Path(attachment_path.strip()), created_at))
+        return created_transactions
+
+    def _metadata_snapshot_from_ledger(self, ledger: LedgerData) -> MetadataSnapshot:
+        category_map = {category.id: category.name for category in ledger.categories}
+        subcategories_by_category: dict[str, list[str]] = {category.name: [] for category in ledger.categories}
+        for subcategory in sorted(ledger.subcategories, key=lambda item: item.name.casefold()):
+            category_name = category_map.get(subcategory.category_id)
+            if category_name is None:
+                continue
+            subcategories_by_category.setdefault(category_name, []).append(subcategory.name)
+        return MetadataSnapshot(
+            accounts=sorted((account.name for account in ledger.accounts), key=str.casefold),
+            payees=sorted((payee.name for payee in ledger.payees), key=str.casefold),
+            categories=sorted((category.name for category in ledger.categories), key=str.casefold),
+            subcategories_by_category=subcategories_by_category,
+        )
+
     def _build_record(self, ledger: LedgerData, transaction: Transaction) -> TransactionRecord:
         account_map = {account.id: account.name for account in ledger.accounts}
         payee_map = {payee.id: payee.name for payee in ledger.payees}
         category_map = {category.id: category.name for category in ledger.categories}
         subcategory_map = {subcategory.id: subcategory.name for subcategory in ledger.subcategories}
-        attachments = [
-            attachment
-            for attachment in ledger.attachments
-            if attachment.transaction_id == transaction.id
-        ]
+        attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id == transaction.id]
         return TransactionRecord(
             id=transaction.id,
             entry_type=transaction.entry_type,
             account_name=account_map.get(transaction.account_id, "Unknown"),
             payee_name=payee_map.get(transaction.payee_id, "Unknown"),
             category_name=category_map.get(transaction.category_id, "Unknown"),
-            subcategory_name=(
-                subcategory_map.get(transaction.subcategory_id)
-                if transaction.subcategory_id is not None
-                else None
-            ),
+            subcategory_name=subcategory_map.get(transaction.subcategory_id) if transaction.subcategory_id else None,
             amount=transaction.amount,
             notes=transaction.notes,
             spent_on=transaction.spent_on,
@@ -287,16 +479,33 @@ class ExpenseTracker:
             attachments=attachments,
         )
 
+    def _transaction_group_ids(self, ledger: LedgerData, transaction_id: str) -> set[str]:
+        target = next((item for item in ledger.transactions if item.id == transaction_id), None)
+        if target is None:
+            return set()
+        transaction_ids = {transaction_id}
+        if target.linked_transaction_id is not None:
+            transaction_ids.add(target.linked_transaction_id)
+        return transaction_ids
+
+    def _find_account_by_name(self, ledger: LedgerData, name: str) -> Account | None:
+        return next((item for item in ledger.accounts if self._normalize(item.name) == self._normalize(name)), None)
+
+    def _find_payee_by_name(self, ledger: LedgerData, name: str) -> Payee | None:
+        return next((item for item in ledger.payees if self._normalize(item.name) == self._normalize(name)), None)
+
+    def _find_category_by_name(self, ledger: LedgerData, name: str) -> Category | None:
+        return next((item for item in ledger.categories if self._normalize(item.name) == self._normalize(name)), None)
+
+    def _find_subcategory(self, ledger: LedgerData, category_id: str, name: str) -> Subcategory | None:
+        return next((item for item in ledger.subcategories if item.category_id == category_id and self._normalize(item.name) == self._normalize(name)), None)
+
     def _get_or_create_account(self, ledger: LedgerData, name: str) -> Account:
         normalized_name = self._require_name(name, "Account")
-        existing = next(
-            (account for account in ledger.accounts if self._normalize(account.name) == self._normalize(normalized_name)),
-            None,
-        )
+        existing = self._find_account_by_name(ledger, normalized_name)
         if existing is not None:
             self._ensure_linked_payee(ledger, existing)
             return existing
-
         account = Account(id=str(uuid4()), name=normalized_name)
         ledger.accounts.append(account)
         self._ensure_linked_payee(ledger, account)
@@ -310,35 +519,20 @@ class ExpenseTracker:
 
     def _get_or_create_payee(self, ledger: LedgerData, name: str) -> Payee:
         normalized_name = self._require_name(name, "Payee")
-        existing = next(
-            (payee for payee in ledger.payees if self._normalize(payee.name) == self._normalize(normalized_name)),
-            None,
-        )
+        existing = self._find_payee_by_name(ledger, normalized_name)
         if existing is not None:
             return existing
-
-        matching_account = next(
-            (account for account in ledger.accounts if self._normalize(account.name) == self._normalize(normalized_name)),
-            None,
-        )
-        payee = Payee(
-            id=str(uuid4()),
-            name=normalized_name,
-            linked_account_id=matching_account.id if matching_account is not None else None,
-        )
+        matching_account = self._find_account_by_name(ledger, normalized_name)
+        payee = Payee(id=str(uuid4()), name=normalized_name, linked_account_id=matching_account.id if matching_account is not None else None)
         ledger.payees.append(payee)
         return payee
 
     def _ensure_linked_payee(self, ledger: LedgerData, account: Account) -> Payee:
-        existing = next(
-            (payee for payee in ledger.payees if payee.linked_account_id == account.id),
-            None,
-        )
+        existing = next((payee for payee in ledger.payees if payee.linked_account_id == account.id), None)
         if existing is not None:
             if existing.name != account.name:
                 existing.name = account.name
             return existing
-
         payee = Payee(id=str(uuid4()), name=account.name, linked_account_id=account.id)
         ledger.payees.append(payee)
         return payee
@@ -354,53 +548,27 @@ class ExpenseTracker:
 
     def _get_or_create_category(self, ledger: LedgerData, name: str) -> Category:
         normalized_name = self._require_name(name, "Category")
-        existing = next(
-            (category for category in ledger.categories if self._normalize(category.name) == self._normalize(normalized_name)),
-            None,
-        )
+        existing = self._find_category_by_name(ledger, normalized_name)
         if existing is not None:
             return existing
-
         category = Category(id=str(uuid4()), name=normalized_name)
         ledger.categories.append(category)
         return category
 
-    def _get_or_create_subcategory(
-        self,
-        ledger: LedgerData,
-        name: str | None,
-        category_id: str,
-    ) -> Subcategory | None:
+    def _get_or_create_subcategory(self, ledger: LedgerData, name: str | None, category_id: str) -> Subcategory | None:
         if name is None or not name.strip():
             return None
         normalized_name = name.strip()
-        existing = next(
-            (
-                subcategory
-                for subcategory in ledger.subcategories
-                if self._normalize(subcategory.name) == self._normalize(normalized_name)
-            ),
-            None,
-        )
+        existing = next((subcategory for subcategory in ledger.subcategories if self._normalize(subcategory.name) == self._normalize(normalized_name)), None)
         if existing is not None:
             if existing.category_id != category_id:
                 raise ValueError("Subcategory already belongs to a different category.")
             return existing
-
-        subcategory = Subcategory(
-            id=str(uuid4()),
-            name=normalized_name,
-            category_id=category_id,
-        )
+        subcategory = Subcategory(id=str(uuid4()), name=normalized_name, category_id=category_id)
         ledger.subcategories.append(subcategory)
         return subcategory
 
-    def _copy_attachment(
-        self,
-        transaction_id: str,
-        source_path: Path,
-        uploaded_at: datetime,
-    ) -> Attachment:
+    def _copy_attachment(self, transaction_id: str, source_path: Path, uploaded_at: datetime) -> Attachment:
         if not source_path.exists() or not source_path.is_file():
             raise ValueError(f"Attachment {source_path} was not found.")
         destination_dir = self.storage.attachments_dir / transaction_id

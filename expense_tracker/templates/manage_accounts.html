@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Manage Accounts{% endblock %}
+{% block content %}
+<section class="hero-card"><h1>Accounts</h1><p>Accounts automatically appear in payees for transfers.</p></section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<form class="stack-form card-form" method="post"><input type="hidden" name="action" value="create"><label>New account</label><input name="name" placeholder="e.g. HDFC" required><button class="button primary" type="submit">Add account</button></form>
+<section class="list-stack">{% for account in accounts %}<article class="transaction-card"><div class="hero-row"><strong>{{ account.name }}</strong><span class="amount {% if account.balance|float < 0 %}negative{% else %}positive{% endif %}">${{ account.balance }}</span></div><form class="split-row" method="post"><input type="hidden" name="action" value="rename"><input type="hidden" name="current_name" value="{{ account.name }}"><input name="new_name" value="{{ account.name }}" required><button class="button" type="submit">Rename</button></form><form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="current_name" value="{{ account.name }}"><button class="button danger" type="submit">Delete</button></form></article>{% endfor %}</section>
+{% endblock %}

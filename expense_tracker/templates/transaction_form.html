@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'edit' %}Edit{% else %}Add{% endif %} Transaction{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <h1>{% if mode == 'edit' %}Edit{% else %}Add{% endif %} transaction</h1>
+  <p>Positive amounts are income, negative amounts are expenses, and using an account as the payee creates a transfer.</p>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<form class="stack-form card-form" method="post" enctype="multipart/form-data" action="{% if mode == 'edit' %}/transactions/{{ transaction.id }}/edit{% else %}/transactions{% endif %}">
+  <label>Account</label>
+  <input name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" list="accounts-list" required>
+  <label>Payee</label>
+  <input name="payee_name" value="{{ selected_payee or (transaction.payee_name if transaction else '') }}" list="payees-list" required>
+  <label>Category</label>
+  <input name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" list="categories-list" required>
+  <label>Amount</label>
+  <input name="amount" value="{{ '%.2f'|format(transaction.amount) if transaction else '' }}" inputmode="decimal" required>
+  <label>Date</label>
+  <input name="spent_on" type="date" value="{{ transaction.spent_on.isoformat() if transaction else '' }}" required>
+  <label>Notes</label>
+  <textarea name="notes" rows="4">{{ transaction.notes if transaction else '' }}</textarea>
+  <label>Files</label>
+  <input name="files" type="file" multiple>
+  {% if transaction and transaction.attachments %}
+    <div class="muted">Existing attachments:</div>
+    <ul class="attachment-list">{% for attachment in transaction.attachments %}<li><a href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a></li>{% endfor %}</ul>
+  {% endif %}
+  <div class="split-row">
+    <button class="button primary" type="submit">Save</button>
+    <a class="button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Cancel</a>
+  </div>
+</form>
+<datalist id="accounts-list">{% for account in accounts %}<option value="{{ account }}"></option>{% endfor %}</datalist>
+<datalist id="payees-list">{% for payee in payees %}<option value="{{ payee }}"></option>{% endfor %}</datalist>
+<datalist id="categories-list">{% for category in category_options %}<option value="{{ category }}"></option>{% endfor %}</datalist>
+{% endblock %}

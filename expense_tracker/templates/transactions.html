@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Transactions · Expense Tracker{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div class="hero-row">
+    <div>
+      <h1>Transactions</h1>
+      <p>Filter by account, category, payee, or date.</p>
+    </div>
+    <a class="button primary" href="/transactions/new{% if filters.account %}?account={{ filters.account | urlencode }}{% endif %}">Add transaction</a>
+  </div>
+  <form class="stack-form" method="get">
+    <input name="account" placeholder="Account" value="{{ filters.account or '' }}">
+    <input name="category" placeholder="Category" value="{{ filters.category or '' }}">
+    <input name="payee" placeholder="Payee" value="{{ filters.payee or '' }}">
+    <input name="date" value="{{ filters.exact_date or '' }}" type="date">
+    <div class="split-row">
+      <input name="start_date" value="{{ filters.start_date or '' }}" type="date">
+      <input name="end_date" value="{{ filters.end_date or '' }}" type="date">
+    </div>
+    <div class="split-row">
+      <button class="button primary" type="submit">Apply filters</button>
+      <a class="button" href="/transactions">Clear</a>
+    </div>
+  </form>
+</section>
+<section class="summary-strip"><span>Visible total: ${{ '%.2f'|format(total_amount) }}</span><span>{{ transactions|length }} transaction(s)</span></section>
+<section class="list-stack">
+  {% for transaction in transactions %}
+    <article class="transaction-card">
+      <div class="hero-row">
+        <div>
+          <strong>{{ transaction.account_name }}</strong>
+          <div class="muted">{{ transaction.payee_name }} · {{ transaction.spent_on.isoformat() }}</div>
+        </div>
+        <div class="amount {% if transaction.amount < 0 %}negative{% else %}positive{% endif %}">${{ '%.2f'|format(transaction.amount) }}</div>
+      </div>
+      <div class="muted">{{ transaction.category_name }}{% if transaction.subcategory_name %} / {{ transaction.subcategory_name }}{% endif %}</div>
+      {% if transaction.notes %}<p>{{ transaction.notes }}</p>{% endif %}
+      {% if transaction.attachments %}
+        <ul class="attachment-list">{% for attachment in transaction.attachments %}<li><a href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a></li>{% endfor %}</ul>
+      {% endif %}
+      <div class="split-row compact-gap">
+        <a class="button" href="/transactions/{{ transaction.id }}/edit">Edit</a>
+        <form method="post" action="/transactions/{{ transaction.id }}/delete"><button class="button danger" type="submit">Delete</button></form>
+      </div>
+    </article>
+  {% else %}
+    <div class="empty-card">No transactions match the current filters.</div>
+  {% endfor %}
+</section>
+{% endblock %}

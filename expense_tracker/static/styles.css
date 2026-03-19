@@ -1,0 +1,27 @@
+:root { color-scheme: light dark; --bg: #f5f7fb; --card: #ffffff; --border: #d8deea; --text: #1d2433; --muted: #667085; --primary: #2667ff; --danger: #c62828; --positive: #157f3d; --negative: #b42318; }
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 1rem; background: var(--card); border-bottom: 1px solid var(--border); }
+.brand, .nav-links a, a { color: inherit; text-decoration: none; }
+.nav-links { display: flex; gap: 0.75rem; font-size: 0.95rem; }
+.page-shell { max-width: 920px; margin: 0 auto; padding: 1rem; }
+.hero-card, .transaction-card, .empty-card, .card-form, .account-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1rem; box-sizing: border-box; }
+.hero-card { margin-bottom: 1rem; }
+.card-grid, .list-stack { display: grid; gap: 0.9rem; }
+.account-card { display: flex; align-items: center; justify-content: space-between; }
+.account-name { font-weight: 700; }
+.account-balance, .amount { font-weight: 700; }
+.amount.positive { color: var(--positive); }
+.amount.negative { color: var(--negative); }
+.stack-form { display: grid; gap: 0.75rem; }
+.stack-form input, .stack-form textarea, .split-row input { width: 100%; box-sizing: border-box; padding: 0.85rem; border: 1px solid var(--border); border-radius: 12px; font: inherit; }
+.split-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; align-items: start; }
+.compact-gap { gap: 0.5rem; }
+.button { display: inline-flex; align-items: center; justify-content: center; padding: 0.85rem 1rem; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; }
+.button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.button.danger { color: #fff; background: var(--danger); border-color: var(--danger); }
+.hero-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.summary-strip { display: flex; justify-content: space-between; gap: 1rem; padding: 0 0.25rem 0.75rem; color: var(--muted); font-size: 0.95rem; }
+.muted { color: var(--muted); }
+.error-banner { margin-bottom: 1rem; padding: 0.85rem 1rem; border-radius: 12px; background: #fdecec; color: #7a1f1f; }
+.attachment-list, .meta-list { padding-left: 1.2rem; color: var(--muted); }
+@media (min-width: 700px) { .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -2,6 +2,7 @@
 
 from .models import Account, Category, Payee, Subcategory, Transaction, TransactionRecord
 from .tracker import ExpenseTracker
+from .web import create_app
 
 __all__ = [
     "Account",
@@ -11,4 +12,5 @@ __all__ = [
     "Subcategory",
     "Transaction",
     "TransactionRecord",
+    "create_app",
 ]

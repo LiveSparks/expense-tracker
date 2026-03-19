@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Manage Payees{% endblock %}
+{% block content %}
+<section class="hero-card"><h1>Payees</h1><p>Linked account payees are shown here but renamed through accounts.</p></section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<form class="stack-form card-form" method="post"><input type="hidden" name="action" value="create"><label>New payee</label><input name="name" placeholder="e.g. Amazon" required><button class="button primary" type="submit">Add payee</button></form>
+<section class="list-stack">{% for payee in payees %}<article class="transaction-card"><div class="hero-row"><strong>{{ payee.name }}</strong>{% if payee.linked_account_name %}<span class="muted">Linked to {{ payee.linked_account_name }}</span>{% endif %}</div>{% if not payee.linked_account_name %}<form class="split-row" method="post"><input type="hidden" name="action" value="rename"><input type="hidden" name="current_name" value="{{ payee.name }}"><input name="new_name" value="{{ payee.name }}" required><button class="button" type="submit">Rename</button></form><form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="current_name" value="{{ payee.name }}"><button class="button danger" type="submit">Delete</button></form>{% endif %}</article>{% endfor %}</section>
+{% endblock %}

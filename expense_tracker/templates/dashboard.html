@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Accounts · Expense Tracker{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <h1>Accounts</h1>
+  <p>Tap an account to view its transactions.</p>
+</section>
+<section class="card-grid">
+  {% for account in accounts %}
+    <a class="account-card" href="/transactions?account={{ account.name | urlencode }}">
+      <span class="account-name">{{ account.name }}</span>
+      <span class="account-balance">${{ account.balance }}</span>
+    </a>
+  {% else %}
+    <div class="empty-card">No accounts yet. Add your first transaction to create one.</div>
+  {% endfor %}
+</section>
+{% endblock %}

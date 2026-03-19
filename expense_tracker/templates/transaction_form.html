@@ -1,36 +1,75 @@
 {% extends "base.html" %}
 {% block title %}{% if mode == 'edit' %}Edit{% else %}Add{% endif %} Transaction{% endblock %}
 {% block content %}
-<section class="hero-card">
+<section class="page-head compact-head compact-head-row">
   <h1>{% if mode == 'edit' %}Edit{% else %}Add{% endif %} transaction</h1>
-  <p>Positive amounts are income, negative amounts are expenses, and using an account as the payee creates a transfer.</p>
+  <a class="button compact-button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Back</a>
 </section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
-<form class="stack-form card-form" method="post" enctype="multipart/form-data" action="{% if mode == 'edit' %}/transactions/{{ transaction.id }}/edit{% else %}/transactions{% endif %}">
+<form class="stack-form card-form compact-form" method="post" enctype="multipart/form-data" action="{% if mode == 'edit' %}/transactions/{{ transaction.id }}/edit{% else %}/transactions{% endif %}">
   <label>Account</label>
-  <input name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" list="accounts-list" required>
+  <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
+    <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required>
+    <button class="picker-toggle" type="button" aria-label="Show account options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
   <label>Payee</label>
-  <input name="payee_name" value="{{ selected_payee or (transaction.payee_name if transaction else '') }}" list="payees-list" required>
-  <label>Category</label>
-  <input name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" list="categories-list" required>
-  <label>Amount</label>
-  <input name="amount" value="{{ '%.2f'|format(transaction.amount) if transaction else '' }}" inputmode="decimal" required>
-  <label>Date</label>
-  <input name="spent_on" type="date" value="{{ transaction.spent_on.isoformat() if transaction else '' }}" required>
-  <label>Notes</label>
-  <textarea name="notes" rows="4">{{ transaction.notes if transaction else '' }}</textarea>
+  <div class="picker js-picker" data-options='{{ payee_picker_options | tojson }}' data-allow-custom="true">
+    <input class="picker-input" name="payee_name" value="{{ selected_payee or (transaction.payee_name if transaction else '') }}" autocomplete="off" required>
+    <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
+  <div class="label-row">
+    <label>Category</label>
+    <button class="button compact-button small-button" type="button" data-open-category-dialog>New subcategory</button>
+  </div>
+  <div class="picker js-picker category-picker" data-options='{{ category_picker_options | tojson }}' data-allow-custom="false">
+    <input class="picker-input" name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" autocomplete="off" placeholder="Choose a subcategory" required>
+    <button class="picker-toggle" type="button" aria-label="Show category options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
+  <div class="split-row compact-gap compact-split">
+    <div>
+      <label>Amount</label>
+      <input name="amount" value="{{ '%.2f'|format(transaction.amount) if transaction else '' }}" inputmode="decimal" required>
+    </div>
+    <div>
+      <label>Date</label>
+      <input name="spent_on" type="date" value="{{ selected_spent_on }}" required>
+    </div>
+  </div>
   <label>Files</label>
   <input name="files" type="file" multiple>
   {% if transaction and transaction.attachments %}
-    <div class="muted">Existing attachments:</div>
-    <ul class="attachment-list">{% for attachment in transaction.attachments %}<li><a href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a></li>{% endfor %}</ul>
+    <div class="attachment-pills">{% for attachment in transaction.attachments %}<a class="attachment-pill" href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a>{% endfor %}</div>
   {% endif %}
-  <div class="split-row">
-    <button class="button primary" type="submit">Save</button>
-    <a class="button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Cancel</a>
+  <label>Notes</label>
+  <textarea name="notes" rows="3">{{ transaction.notes if transaction else '' }}</textarea>
+  <div class="split-row compact-gap compact-split actions-row">
+    <button class="button primary compact-button" type="submit">Save</button>
+    <a class="button compact-button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Cancel</a>
   </div>
 </form>
-<datalist id="accounts-list">{% for account in accounts %}<option value="{{ account }}"></option>{% endfor %}</datalist>
-<datalist id="payees-list">{% for payee in payees %}<option value="{{ payee }}"></option>{% endfor %}</datalist>
-<datalist id="categories-list">{% for category in category_options %}<option value="{{ category }}"></option>{% endfor %}</datalist>
+<dialog class="category-dialog" data-category-dialog>
+  <form method="dialog" class="stack-form compact-form dialog-card">
+    <div class="hero-row"><strong>New category</strong><button class="button compact-button small-button" type="submit">Close</button></div>
+    <label>Category group</label>
+    <div class="picker js-picker" data-options='{{ category_group_options | tojson }}' data-allow-custom="true">
+      <input class="picker-input" data-category-group-input autocomplete="off" placeholder="e.g. Travel">
+      <button class="picker-toggle" type="button" aria-label="Show category groups">▾</button>
+      <div class="picker-menu"></div>
+    </div>
+    <label>Subcategory</label>
+    <input data-category-subcategory-input placeholder="e.g. Flights" autocomplete="off">
+    <div class="split-row compact-gap compact-split actions-row">
+      <button class="button primary compact-button" type="button" data-apply-category-dialog>Use this category</button>
+      <button class="button compact-button" type="submit">Cancel</button>
+    </div>
+  </form>
+</dialog>
+{% if mode == 'edit' %}
+<form method="post" action="/transactions/{{ transaction.id }}/delete" class="inline-delete-form">
+  <button class="button danger compact-button full-width" type="submit" data-confirm-message="Delete this transaction?">Delete transaction</button>
+</form>
+{% endif %}
 {% endblock %}

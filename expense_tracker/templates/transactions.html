@@ -1,52 +1,113 @@
 {% extends "base.html" %}
 {% block title %}Transactions · Expense Tracker{% endblock %}
 {% block content %}
-<section class="hero-card">
-  <div class="hero-row">
-    <div>
-      <h1>Transactions</h1>
-      <p>Filter by account, category, payee, or date.</p>
-    </div>
-    <a class="button primary" href="/transactions/new{% if filters.account %}?account={{ filters.account | urlencode }}{% endif %}">Add transaction</a>
+<section class="page-head compact-head">
+  <div>
+    <h1>Transactions</h1>
+    {% if filters.account %}<div class="inline-chip">{{ filters.account }}</div>{% endif %}
   </div>
-  <form class="stack-form" method="get">
-    <input name="account" placeholder="Account" value="{{ filters.account or '' }}">
-    <input name="category" placeholder="Category" value="{{ filters.category or '' }}">
-    <input name="payee" placeholder="Payee" value="{{ filters.payee or '' }}">
-    <input name="date" value="{{ filters.exact_date or '' }}" type="date">
-    <div class="split-row">
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<form class="search-bar" method="get">
+  {% if filters.account %}<input type="hidden" name="account" value="{{ filters.account }}">{% endif %}
+  {% if filters.payee %}<input type="hidden" name="payee" value="{{ filters.payee }}">{% endif %}
+  {% if filters.category %}<input type="hidden" name="category" value="{{ filters.category }}">{% endif %}
+  {% if filters.start_date %}<input type="hidden" name="start_date" value="{{ filters.start_date }}">{% endif %}
+  {% if filters.end_date %}<input type="hidden" name="end_date" value="{{ filters.end_date }}">{% endif %}
+  <input name="search" placeholder="Search transactions" value="{{ filters.search or '' }}" autocomplete="off">
+  <button class="button compact-button" type="submit">Search</button>
+  {% if filters.search %}<a class="button compact-button" href="/transactions{% if filters.account or filters.payee or filters.category or filters.start_date or filters.end_date %}?{% endif %}{% if filters.account %}account={{ filters.account | urlencode }}{% if filters.payee or filters.category or filters.start_date or filters.end_date %}&{% endif %}{% endif %}{% if filters.payee %}payee={{ filters.payee | urlencode }}{% if filters.category or filters.start_date or filters.end_date %}&{% endif %}{% endif %}{% if filters.category %}category={{ filters.category | urlencode }}{% if filters.start_date or filters.end_date %}&{% endif %}{% endif %}{% if filters.start_date %}start_date={{ filters.start_date | urlencode }}{% if filters.end_date %}&{% endif %}{% endif %}{% if filters.end_date %}end_date={{ filters.end_date | urlencode }}{% endif %}">Clear</a>{% endif %}
+</form>
+<details class="filter-drawer" {% if has_active_filters %}open{% endif %}>
+  <summary>Filters</summary>
+  <form class="stack-form compact-form" method="get">
+    {% if filters.search %}<input type="hidden" name="search" value="{{ filters.search }}">{% endif %}
+    <input type="hidden" name="show_filters" value="1">
+    <div class="split-row compact-gap compact-split">
+      <div class="picker js-picker compact-picker" data-options='{{ filter_account_options | tojson }}' data-allow-custom="false">
+        <input class="picker-input" name="account" placeholder="Account" value="{{ filters.account or '' }}" autocomplete="off">
+        <button class="picker-toggle" type="button" aria-label="Show account options">▾</button>
+        <div class="picker-menu"></div>
+      </div>
+      <div class="picker js-picker compact-picker" data-options='{{ filter_payee_options | tojson }}' data-allow-custom="false">
+        <input class="picker-input" name="payee" placeholder="Payee" value="{{ filters.payee or '' }}" autocomplete="off">
+        <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
+        <div class="picker-menu"></div>
+      </div>
+    </div>
+    <div class="picker js-picker compact-picker" data-options='{{ filter_category_options | tojson }}' data-allow-custom="false">
+      <input class="picker-input" name="category" placeholder="Category" value="{{ filters.category or '' }}" autocomplete="off">
+      <button class="picker-toggle" type="button" aria-label="Show category options">▾</button>
+      <div class="picker-menu"></div>
+    </div>
+    <div class="split-row compact-gap compact-split">
       <input name="start_date" value="{{ filters.start_date or '' }}" type="date">
       <input name="end_date" value="{{ filters.end_date or '' }}" type="date">
     </div>
-    <div class="split-row">
-      <button class="button primary" type="submit">Apply filters</button>
-      <a class="button" href="/transactions">Clear</a>
+    <div class="split-row compact-gap compact-split actions-row">
+      <button class="button primary compact-button" type="submit">Apply</button>
+      <a class="button compact-button" href="/transactions">Clear</a>
     </div>
   </form>
-</section>
-<section class="summary-strip"><span>Visible total: ${{ '%.2f'|format(total_amount) }}</span><span>{{ transactions|length }} transaction(s)</span></section>
-<section class="list-stack">
-  {% for transaction in transactions %}
-    <article class="transaction-card">
-      <div class="hero-row">
-        <div>
-          <strong>{{ transaction.account_name }}</strong>
-          <div class="muted">{{ transaction.payee_name }} · {{ transaction.spent_on.isoformat() }}</div>
-        </div>
-        <div class="amount {% if transaction.amount < 0 %}negative{% else %}positive{% endif %}">${{ '%.2f'|format(transaction.amount) }}</div>
+</details>
+<section class="summary-strip compact-summary"><span>{{ total_amount|currency }}</span><span>{{ transactions|length }} items</span></section>
+<section class="list-stack dense-list transaction-selection" data-selection-root>
+  {% for group in grouped_transactions %}
+    <section class="date-group" data-date-group>
+      <button class="date-group-label" type="button" data-date-group-toggle>{{ group.date }}</button>
+      <div class="date-group-list">
+        {% for transaction in group.transactions %}
+          <article class="transaction-card compact-transaction selectable-transaction" data-transaction-id="{{ transaction.id }}" data-edit-url="/transactions/{{ transaction.id }}/edit" tabindex="0">
+            <div class="transaction-main-row">
+              <div class="transaction-main-text">
+                <strong class="transaction-primary">{{ transaction.payee_name }}</strong>
+                <div class="transaction-meta">{{ transaction.account_name }} · {{ transaction.category_name }}{% if transaction.subcategory_name %} / {{ transaction.subcategory_name }}{% endif %}</div>
+                {% if transaction.notes %}<div class="transaction-notes">{{ transaction.notes }}</div>{% endif %}
+                {% if transaction.attachments %}
+                  <div class="attachment-pills">{% for attachment in transaction.attachments %}<a class="attachment-pill" href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a>{% endfor %}</div>
+                {% endif %}
+              </div>
+              <div class="amount {% if transaction.amount < 0 %}negative{% else %}positive{% endif %}">{{ transaction.amount|currency }}</div>
+            </div>
+          </article>
+        {% endfor %}
       </div>
-      <div class="muted">{{ transaction.category_name }}{% if transaction.subcategory_name %} / {{ transaction.subcategory_name }}{% endif %}</div>
-      {% if transaction.notes %}<p>{{ transaction.notes }}</p>{% endif %}
-      {% if transaction.attachments %}
-        <ul class="attachment-list">{% for attachment in transaction.attachments %}<li><a href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a></li>{% endfor %}</ul>
-      {% endif %}
-      <div class="split-row compact-gap">
-        <a class="button" href="/transactions/{{ transaction.id }}/edit">Edit</a>
-        <form method="post" action="/transactions/{{ transaction.id }}/delete"><button class="button danger" type="submit">Delete</button></form>
-      </div>
-    </article>
+    </section>
   {% else %}
     <div class="empty-card">No transactions match the current filters.</div>
   {% endfor %}
 </section>
+<form id="bulk-action-form" class="bulk-action-bar" method="post" action="/transactions/bulk" data-bulk-form>
+  <input type="hidden" name="return_to" value="{{ current_url }}">
+  <div class="bulk-top-row">
+    <strong data-selection-count>0 selected</strong>
+    <button class="button compact-button small-button" type="button" data-clear-selection>Done</button>
+  </div>
+  <div class="bulk-button-row">
+    <button class="button danger compact-button" type="submit" name="action" value="delete" data-confirm-message="Delete the selected transactions?">Delete</button>
+    <button class="button compact-button" type="submit" name="action" value="duplicate">Duplicate</button>
+  </div>
+  <details class="bulk-advanced">
+    <summary>More actions</summary>
+    <div class="bulk-advanced-body">
+      <div class="bulk-inline-grid">
+        <div class="picker js-picker compact-picker" data-options='{{ bulk_payee_options | tojson }}' data-allow-custom="true">
+          <input class="picker-input" name="target_payee" placeholder="Change payee" autocomplete="off">
+          <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
+          <div class="picker-menu"></div>
+        </div>
+        <button class="button compact-button" type="submit" name="action" value="change_payee">Payee</button>
+        <div class="picker js-picker compact-picker" data-options='{{ bulk_move_account_options | tojson }}' data-allow-custom="true">
+          <input class="picker-input" name="target_account" placeholder="Move account" autocomplete="off">
+          <button class="picker-toggle" type="button" aria-label="Show account options">▾</button>
+          <div class="picker-menu"></div>
+        </div>
+        <button class="button compact-button" type="submit" name="action" value="move_account">Move</button>
+        <input name="target_date" type="date">
+        <button class="button compact-button" type="submit" name="action" value="change_date">Date</button>
+      </div>
+    </div>
+  </details>
+  <div data-selection-inputs></div>
+</form>
 {% endblock %}

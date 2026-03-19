@@ -1,8 +1,74 @@
 {% extends "base.html" %}
 {% block title %}Manage Categories{% endblock %}
 {% block content %}
-<section class="hero-card"><h1>Categories</h1><p>Manage categories and subcategories used in transaction forms.</p></section>
+<section class="page-head compact-head"><h1>Categories</h1></section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
-<form class="stack-form card-form" method="post"><input type="hidden" name="action" value="create-category"><label>New category</label><input name="name" placeholder="e.g. Travel" required><button class="button primary" type="submit">Add category</button></form>
-<section class="list-stack">{% for category in categories %}<article class="transaction-card"><div class="hero-row"><strong>{{ category.name }}</strong></div><form class="split-row" method="post"><input type="hidden" name="action" value="rename-category"><input type="hidden" name="current_name" value="{{ category.name }}"><input name="new_name" value="{{ category.name }}" required><button class="button" type="submit">Rename</button></form><form class="split-row compact-gap" method="post"><input type="hidden" name="action" value="create-subcategory"><input type="hidden" name="category_name" value="{{ category.name }}"><input name="subcategory_name" placeholder="Add subcategory" required><button class="button" type="submit">Add subcategory</button></form>{% if category.subcategories %}<ul class="meta-list">{% for subcategory in category.subcategories %}<li><form class="split-row compact-gap" method="post"><input type="hidden" name="action" value="rename-subcategory"><input type="hidden" name="category_name" value="{{ category.name }}"><input type="hidden" name="current_name" value="{{ subcategory }}"><input name="new_name" value="{{ subcategory }}" required><button class="button" type="submit">Rename</button></form><form method="post"><input type="hidden" name="action" value="delete-subcategory"><input type="hidden" name="category_name" value="{{ category.name }}"><input type="hidden" name="current_name" value="{{ subcategory }}"><button class="button danger" type="submit">Delete</button></form></li>{% endfor %}</ul>{% endif %}<form method="post"><input type="hidden" name="action" value="delete-category"><input type="hidden" name="current_name" value="{{ category.name }}"><button class="button danger" type="submit">Delete category</button></form></article>{% endfor %}</section>
+<form class="manage-add-row manage-add-grid" method="post">
+  <input type="hidden" name="action" value="create-subcategory">
+  <input name="category_name" placeholder="Category group" required>
+  <input name="subcategory_name" placeholder="Subcategory" required>
+  <button class="button primary compact-button" type="submit">Add</button>
+</form>
+<section class="manage-list manage-category-list">
+  {% for category in categories %}
+    <article class="manage-group">
+      <div class="manage-row manage-group-row">
+        <button class="manage-name" type="button" data-inline-edit-open>{{ category.name }}</button>
+        <form class="manage-inline-form" method="post" hidden>
+          <input type="hidden" name="action" value="rename-category">
+          <input type="hidden" name="current_name" value="{{ category.name }}">
+          <input name="new_name" value="{{ category.name }}" required data-inline-edit-input>
+        </form>
+        {% if category.transaction_count %}<span class="manage-tag">{{ category.transaction_count }} txns</span>{% endif %}
+        <div class="inline-action-form">
+          <button class="icon-button danger" type="button" aria-label="Delete {{ category.name }}" data-manage-delete data-delete-kind="category" data-delete-name="{{ category.name }}" data-delete-count="{{ category.transaction_count }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8zm1 11h8a2 2 0 0 0 2-2V8H6v11a2 2 0 0 0 2 2z" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="manage-sub-list">
+        {% for subcategory in category.subcategories %}
+          <article class="manage-row manage-sub-row">
+            <button class="manage-name" type="button" data-inline-edit-open>{{ subcategory.name }}</button>
+            <form class="manage-inline-form" method="post" hidden>
+              <input type="hidden" name="action" value="rename-subcategory">
+              <input type="hidden" name="category_name" value="{{ category.name }}">
+              <input type="hidden" name="current_name" value="{{ subcategory.name }}">
+              <input name="new_name" value="{{ subcategory.name }}" required data-inline-edit-input>
+            </form>
+            {% if subcategory.transaction_count %}<span class="manage-tag">{{ subcategory.transaction_count }} txns</span>{% endif %}
+            <div class="inline-action-form">
+              <button class="icon-button danger" type="button" aria-label="Delete {{ subcategory.name }}" data-manage-delete data-delete-kind="subcategory" data-delete-name="{{ subcategory.name }}" data-delete-category="{{ category.name }}" data-delete-count="{{ subcategory.transaction_count }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8zm1 11h8a2 2 0 0 0 2-2V8H6v11a2 2 0 0 0 2 2z" fill="currentColor"/></svg>
+              </button>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+  {% endfor %}
+</section>
+<dialog class="category-dialog" data-manage-delete-dialog>
+  <form method="post" class="stack-form compact-form dialog-card">
+    <input type="hidden" name="action" value="" data-delete-action>
+    <input type="hidden" name="current_name" data-delete-current-name>
+    <input type="hidden" name="category_name" value="" data-delete-category-name>
+    <input type="hidden" name="delete_strategy" value="" data-delete-strategy>
+    <div class="hero-row"><strong data-delete-title>Delete category</strong><button class="button compact-button small-button" type="button" data-close-manage-delete>Close</button></div>
+    <p class="muted" data-delete-message></p>
+    <div data-delete-migration-fields hidden>
+      <label>Migrate transactions to</label>
+      <div class="picker js-picker" data-options='{{ category_value_options | tojson }}' data-allow-custom="false">
+        <input class="picker-input" name="replacement_category_value" autocomplete="off" placeholder="Choose replacement category">
+        <button class="picker-toggle" type="button" aria-label="Show replacement categories">▾</button>
+        <div class="picker-menu"></div>
+      </div>
+    </div>
+    <div class="split-row compact-gap compact-split actions-row" data-delete-actions>
+      <button class="button primary compact-button" type="submit" data-delete-submit>Delete</button>
+      <button class="button compact-button" type="button" data-delete-switch="migrate" hidden>Migrate instead</button>
+      <button class="button danger compact-button" type="button" data-delete-switch="delete_transactions" hidden>Delete transactions</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

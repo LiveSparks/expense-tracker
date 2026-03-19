@@ -5,12 +5,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
 
+from .formatting import format_inr
+from .review_workflow import ReviewWorkflowStore
 from .models import TransactionRecord
 from .tracker import ExpenseTracker
 
 
 def default_data_file() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "ledger.json"
+    return Path(__file__).resolve().parent.parent / "data" / "ledger.db"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--data-file",
         type=Path,
         default=default_data_file(),
-        help="Path to the JSON file used for persistence.",
+        help="Path to the SQLite file used for persistence.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -41,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--account")
     list_parser.add_argument("--category")
     list_parser.add_argument("--payee")
+    list_parser.add_argument("--search")
     list_parser.add_argument("--date")
     list_parser.add_argument("--start-date")
     list_parser.add_argument("--end-date")
@@ -49,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     summary_parser.add_argument("--account")
     summary_parser.add_argument("--category")
     summary_parser.add_argument("--payee")
+    summary_parser.add_argument("--search")
     summary_parser.add_argument("--date")
     summary_parser.add_argument("--start-date")
     summary_parser.add_argument("--end-date")
@@ -56,20 +60,26 @@ def build_parser() -> argparse.ArgumentParser:
     delete_parser = subparsers.add_parser("delete", help="Delete a transaction by id.")
     delete_parser.add_argument("transaction_id")
 
-    subparsers.add_parser("tui", help="Launch the terminal UI.")
     serve_parser = subparsers.add_parser("serve", help="Run the web UI and API server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
 
+    analyze_parser = subparsers.add_parser("analyze-sms", help="Run the legacy SMS analysis pipeline.")
+    analyze_parser.add_argument("--transactions-csv", type=Path, default=Path("/root/All-Accounts_2.csv"))
+    analyze_parser.add_argument("--sms-csv", type=Path, default=Path("/root/all_sms.csv"))
+    analyze_parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent.parent / "data" / "sms_pipeline")
+
+    seed_parser = subparsers.add_parser("seed-demo-data", help="Import generated mock ledger data into the app database.")
+    seed_parser.add_argument(
+        "--seed-file",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "data" / "sms_pipeline" / "mock_ledger_seed.json",
+    )
+
+    import_parser = subparsers.add_parser("import-ledger-csv", help="Replace the app database with transactions from a legacy CSV export.")
+    import_parser.add_argument("--csv-file", type=Path, default=Path("/root/All-Accounts_2.csv"))
+
     return parser
-
-
-def launch_tui(data_file: Path) -> None:
-    from .tui import ExpenseTrackerApp
-
-    app = ExpenseTrackerApp(data_file)
-    app.run()
-
 
 def launch_web(data_file: Path, host: str, port: int) -> None:
     import uvicorn
@@ -90,10 +100,10 @@ def render_transactions(transactions: list[TransactionRecord], total: Decimal) -
         lines.append(
             f"{transaction.id} | {transaction.spent_on.isoformat()} | {transaction.account_name} | "
             f"{transaction.payee_name} | {transaction.category_name} | "
-            f"{transaction.subcategory_name or '-'} | ${transaction.amount:.2f} | "
+            f"{transaction.subcategory_name or '-'} | {format_inr(transaction.amount)} | "
             f"{transaction.notes or '-'} | {len(transaction.attachments)}"
         )
-    lines.append(f"Net total: ${total:.2f}")
+    lines.append(f"Net total: {format_inr(total)}")
     return "\n".join(lines)
 
 
@@ -104,7 +114,7 @@ def render_summary(
     lines = ["Account balances:"]
     if balances:
         for account, amount in balances.items():
-            lines.append(f"- {account}: ${amount:.2f}")
+            lines.append(f"- {account}: {format_inr(amount)}")
     else:
         lines.append("- No accounts yet.")
 
@@ -112,7 +122,7 @@ def render_summary(
     lines.append("Category totals:")
     if category_totals:
         for category, amount in category_totals.items():
-            lines.append(f"- {category}: ${amount:.2f}")
+            lines.append(f"- {category}: {format_inr(amount)}")
     else:
         lines.append("- No matching transactions.")
     return "\n".join(lines)
@@ -137,10 +147,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if len(created) == 2:
                 print(
-                    f"Created transfer {created[0].id} -> {created[1].id} for ${abs(created[0].amount):.2f}."
+                    f"Created transfer {created[0].id} -> {created[1].id} for {format_inr(abs(created[0].amount))}."
                 )
             else:
-                print(f"Added transaction {created[0].id} for ${abs(created[0].amount):.2f}.")
+                print(f"Added transaction {created[0].id} for {format_inr(abs(created[0].amount))}.")
             return 0
 
         if args.command == "list":
@@ -148,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 account=args.account,
                 category=args.category,
                 payee=args.payee,
+                search=args.search,
                 exact_date=args.date,
                 start_date=args.start_date,
                 end_date=args.end_date,
@@ -163,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         account=args.account,
                         category=args.category,
                         payee=args.payee,
+                        search=args.search,
                         exact_date=args.date,
                         start_date=args.start_date,
                         end_date=args.end_date,
@@ -178,12 +190,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Deleted transaction {args.transaction_id}.")
             return 0
 
-        if args.command == "tui":
-            launch_tui(args.data_file)
-            return 0
-
         if args.command == "serve":
             launch_web(args.data_file, args.host, args.port)
+            return 0
+
+        if args.command == "analyze-sms":
+            from .sms_pipeline import analyze_legacy_sms_data
+
+            artifacts = analyze_legacy_sms_data(args.transactions_csv, args.sms_csv, args.output_dir)
+            matched = len([match for match in artifacts.matches if match.transaction is not None])
+            print(
+                f"Analyzed {len(artifacts.transactions)} transactions and {len(artifacts.useful_sms)} useful SMS messages; matched {matched}. Artifacts written to {args.output_dir}."
+            )
+            return 0
+
+        if args.command == "seed-demo-data":
+            summary = tracker.import_ledger_seed(args.seed_file)
+            print(
+                "Imported demo seed "
+                f"({summary['transactions_added']} transactions added, {summary['transactions_skipped']} skipped) from {args.seed_file}."
+            )
+            return 0
+
+        if args.command == "import-ledger-csv":
+            summary = tracker.import_legacy_csv(args.csv_file)
+            ReviewWorkflowStore(args.data_file).clear_reviews()
+            skipped_suffix = f", {summary['skipped_rows']} skipped zero-amount rows" if summary["skipped_rows"] else ""
+            print(
+                "Imported real ledger "
+                f"({summary['transactions']} transactions, {summary['accounts']} accounts, {summary['payees']} payees, "
+                f"{summary['categories']} categories, {summary['subcategories']} subcategories{skipped_suffix}) from {args.csv_file}."
+            )
             return 0
     except ValueError as exc:
         parser.error(str(exc))

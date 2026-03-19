@@ -1,8 +1,53 @@
 {% extends "base.html" %}
 {% block title %}Manage Payees{% endblock %}
 {% block content %}
-<section class="hero-card"><h1>Payees</h1><p>Linked account payees are shown here but renamed through accounts.</p></section>
+<section class="page-head compact-head"><h1>Payees</h1></section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
-<form class="stack-form card-form" method="post"><input type="hidden" name="action" value="create"><label>New payee</label><input name="name" placeholder="e.g. Amazon" required><button class="button primary" type="submit">Add payee</button></form>
-<section class="list-stack">{% for payee in payees %}<article class="transaction-card"><div class="hero-row"><strong>{{ payee.name }}</strong>{% if payee.linked_account_name %}<span class="muted">Linked to {{ payee.linked_account_name }}</span>{% endif %}</div>{% if not payee.linked_account_name %}<form class="split-row" method="post"><input type="hidden" name="action" value="rename"><input type="hidden" name="current_name" value="{{ payee.name }}"><input name="new_name" value="{{ payee.name }}" required><button class="button" type="submit">Rename</button></form><form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="current_name" value="{{ payee.name }}"><button class="button danger" type="submit">Delete</button></form>{% endif %}</article>{% endfor %}</section>
+<form class="manage-add-row" method="post">
+  <input type="hidden" name="action" value="create">
+  <input name="name" placeholder="Add payee" required>
+  <button class="button primary compact-button" type="submit">Add</button>
+</form>
+<section class="manage-list">
+  {% for payee in payees %}
+    <article class="manage-row {% if payee.linked_account_name %}is-linked{% endif %}">
+      <button class="manage-name" type="button" {% if payee.linked_account_name %}disabled{% else %}data-inline-edit-open{% endif %}>{{ payee.name }}</button>
+      {% if not payee.linked_account_name %}
+      <form class="manage-inline-form" method="post" hidden>
+        <input type="hidden" name="action" value="rename">
+        <input type="hidden" name="current_name" value="{{ payee.name }}">
+        <input name="new_name" value="{{ payee.name }}" required data-inline-edit-input>
+      </form>
+      {% endif %}
+      {% if payee.linked_account_name %}<span class="manage-tag">{{ payee.linked_account_name }}</span>{% elif payee.transaction_count %}<span class="manage-tag">{{ payee.transaction_count }} txns</span>{% endif %}
+      <div class="inline-action-form">
+        <button class="icon-button danger" type="button" aria-label="Delete {{ payee.name }}" {% if not payee.can_delete %}disabled{% endif %} data-manage-delete data-delete-name="{{ payee.name }}" data-delete-count="{{ payee.transaction_count }}" data-delete-kind="payee">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8zm1 11h8a2 2 0 0 0 2-2V8H6v11a2 2 0 0 0 2 2z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </article>
+  {% endfor %}
+</section>
+<dialog class="category-dialog" data-manage-delete-dialog>
+  <form method="post" class="stack-form compact-form dialog-card">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="current_name" data-delete-current-name>
+    <input type="hidden" name="delete_strategy" value="" data-delete-strategy>
+    <div class="hero-row"><strong data-delete-title>Delete payee</strong><button class="button compact-button small-button" type="button" data-close-manage-delete>Close</button></div>
+    <p class="muted" data-delete-message></p>
+    <div data-delete-migration-fields hidden>
+      <label>Migrate transactions to</label>
+      <div class="picker js-picker" data-options='{{ payee_options | tojson }}' data-allow-custom="false">
+        <input class="picker-input" name="replacement_name" autocomplete="off" placeholder="Choose replacement payee">
+        <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
+        <div class="picker-menu"></div>
+      </div>
+    </div>
+    <div class="split-row compact-gap compact-split actions-row" data-delete-actions>
+      <button class="button primary compact-button" type="submit" data-delete-submit>Delete</button>
+      <button class="button compact-button" type="button" data-delete-switch="migrate" hidden>Migrate instead</button>
+      <button class="button danger compact-button" type="button" data-delete-switch="delete_transactions" hidden>Delete transactions</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

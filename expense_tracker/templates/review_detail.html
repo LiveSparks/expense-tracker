@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Review draft · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head compact-head-row">
+  <h1>Review draft</h1>
+  <a class="button compact-button" href="/reviews">Back</a>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<section class="transaction-card compact-transaction review-source-card">
+  <div class="transaction-main-text">
+    <strong class="transaction-primary">{{ review.sender }}</strong>
+    <div class="transaction-meta">{{ review.received_at.strftime('%Y-%m-%d %H:%M') }}{% if review.latitude is not none and review.longitude is not none %} · {{ review.latitude }}, {{ review.longitude }}{% endif %}</div>
+    <div class="transaction-notes sms-preview">{{ review.content }}</div>
+  </div>
+</section>
+<form class="stack-form card-form compact-form" method="post" action="/reviews/{{ review.id }}/approve">
+  <label>Account</label>
+  <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
+    <input class="picker-input" name="account_name" value="{{ selected_account }}" autocomplete="off" required>
+    <button class="picker-toggle" type="button" aria-label="Show account options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
+  <label>Payee</label>
+  <div class="picker js-picker" data-options='{{ payee_picker_options | tojson }}' data-allow-custom="true">
+    <input class="picker-input" name="payee_name" value="{{ selected_payee }}" autocomplete="off" required>
+    <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
+  <label>Category</label>
+  <div class="picker js-picker category-picker" data-options='{{ category_picker_options | tojson }}' data-allow-custom="false">
+    <input class="picker-input" name="category_value" value="{{ selected_category }}" autocomplete="off" placeholder="Choose a subcategory" required>
+    <button class="picker-toggle" type="button" aria-label="Show category options">▾</button>
+    <div class="picker-menu"></div>
+  </div>
+  <div class="split-row compact-gap compact-split">
+    <div>
+      <label>Amount</label>
+      <input name="amount" value="{{ selected_amount }}" inputmode="decimal" required>
+    </div>
+    <div>
+      <label>Date</label>
+      <input name="spent_on" type="date" value="{{ selected_spent_on }}" required>
+    </div>
+  </div>
+  <label>Notes</label>
+  <textarea name="notes" rows="3">{{ selected_notes }}</textarea>
+  {% if review.reasoning %}
+    <section class="review-panel">
+      <strong>Why this draft</strong>
+      <ul class="review-list">
+        {% for item in review.reasoning %}
+          <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+  {% if review.similar_examples %}
+    <section class="review-panel">
+      <strong>Similar history</strong>
+      <div class="list-stack dense-list">
+        {% for item in review.similar_examples %}
+          <div class="transaction-card compact-transaction">
+            <div class="transaction-main-row">
+              <div class="transaction-main-text">
+                <strong class="transaction-primary">{{ item.payee_name }}</strong>
+                <div class="transaction-meta">{{ item.account_name }} · {{ item.category_value }} · {{ item.spent_on }}</div>
+                {% if item.notes %}<div class="transaction-notes">{{ item.notes }}</div>{% endif %}
+              </div>
+              <div class="amount {% if item.amount|float < 0 %}negative{% else %}positive{% endif %}">{{ item.amount|currency }}</div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+  <div class="split-row compact-gap compact-split actions-row">
+    <button class="button primary compact-button" type="submit">Approve transaction</button>
+    <a class="button compact-button" href="/reviews">Cancel</a>
+  </div>
+</form>
+{% endblock %}

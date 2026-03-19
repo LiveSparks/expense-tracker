@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Reviews · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head compact-head-row">
+  <h1>For review</h1>
+  <span class="inline-chip">{{ reviews|length }} queued</span>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<section class="list-stack dense-list">
+  {% for review in reviews %}
+    <a class="transaction-card compact-transaction review-card" href="/reviews/{{ review.id }}">
+      <div class="transaction-main-row">
+        <div class="transaction-main-text">
+          <strong class="transaction-primary">{{ review.draft_payee_name or 'Unresolved payee' }}</strong>
+          <div class="transaction-meta">{{ review.draft_account_name or 'No account' }} · {{ review.draft_category_value or 'No category' }}</div>
+          <div class="transaction-notes">{{ review.sender }} · {{ review.received_at.strftime('%Y-%m-%d %H:%M') }}</div>
+          <div class="transaction-notes sms-preview">{{ review.content }}</div>
+        </div>
+        <div class="amount {% if review.draft_amount and review.draft_amount|float < 0 %}negative{% else %}positive{% endif %}">
+          {% if review.draft_amount %}{{ review.draft_amount|currency }}{% else %}--{% endif %}
+        </div>
+      </div>
+    </a>
+  {% else %}
+    <div class="empty-card">No SMS drafts are waiting for review.</div>
+  {% endfor %}
+</section>
+{% endblock %}

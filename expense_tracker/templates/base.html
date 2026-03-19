@@ -6,13 +6,15 @@
     <title>{% block title %}Expense Tracker{% endblock %}</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="/static/app.js" defer></script>
   </head>
   <body>
     <header class="topbar">
       <a href="/" class="brand">Expense Tracker</a>
       <nav class="nav-links">
         <a href="/transactions">Transactions</a>
-        <a href="/transactions/new">Add</a>
+        <a href="/reviews">Reviews</a>
+        <a href="{{ add_transaction_href if add_transaction_href is defined else '/transactions/new' }}" data-add-link>Add</a>
         <a href="/manage">Manage</a>
       </nav>
     </header>

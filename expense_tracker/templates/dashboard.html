@@ -1,18 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Accounts · Expense Tracker{% endblock %}
 {% block content %}
-<section class="hero-card">
+<section class="page-head compact-head">
   <h1>Accounts</h1>
-  <p>Tap an account to view its transactions.</p>
 </section>
-<section class="card-grid">
+<section class="card-grid dense-grid">
   {% for account in accounts %}
-    <a class="account-card" href="/transactions?account={{ account.name | urlencode }}">
+    <a class="account-card compact-card" href="/transactions?account={{ account.name | urlencode }}">
       <span class="account-name">{{ account.name }}</span>
-      <span class="account-balance">${{ account.balance }}</span>
+      <span class="account-balance {% if account.balance|float < 0 %}negative{% else %}positive{% endif %}">{{ account.balance|currency }}</span>
     </a>
   {% else %}
-    <div class="empty-card">No accounts yet. Add your first transaction to create one.</div>
+    <div class="empty-card">No accounts yet.</div>
   {% endfor %}
+</section>
+<section class="card-grid dense-grid review-summary-grid">
+  <a class="account-card compact-card" href="/reviews">
+    <span class="account-name">For review</span>
+    <span class="account-balance {% if pending_reviews %}negative{% else %}positive{% endif %}">{{ pending_reviews }}</span>
+  </a>
 </section>
 {% endblock %}

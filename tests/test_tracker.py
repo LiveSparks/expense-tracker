@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from csv import DictWriter
+from datetime import datetime
 from pathlib import Path
 
 from expense_tracker.tracker import ExpenseTracker
@@ -121,6 +124,34 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
         self.assertTrue(stored_path.exists())
         self.assertEqual(stored_path.read_text(encoding="utf-8"), "receipt data")
 
+    def test_search_matches_payee_and_notes(self) -> None:
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-99.00",
+            spent_on="2026-03-11",
+            notes="Ref 7788 pantry",
+        )
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Pharmacy",
+            category_name="Medical",
+            subcategory_name="Meds",
+            amount="-20.00",
+            spent_on="2026-03-12",
+            notes="Prescription",
+        )
+
+        by_payee = self.tracker.list_transactions(search="amaz")
+        by_notes = self.tracker.list_transactions(search="7788")
+
+        self.assertEqual(len(by_payee), 1)
+        self.assertEqual(by_payee[0].payee_name, "Amazon")
+        self.assertEqual(len(by_notes), 1)
+        self.assertEqual(by_notes[0].notes, "Ref 7788 pantry")
+
     def test_deleting_one_transfer_side_removes_both_transactions(self) -> None:
         self.tracker.add_transaction(
             account_name="HDFC",
@@ -144,6 +175,167 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
 
         self.assertTrue(deleted)
         self.assertEqual(self.tracker.list_transactions(), [])
+
+    def test_delete_in_use_payee_can_migrate_transactions(self) -> None:
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-10.00",
+            spent_on="2026-03-01",
+        )
+
+        self.tracker.delete_payee("Amazon", replacement_payee_name="Blinkit")
+        transactions = self.tracker.list_transactions()
+
+        self.assertEqual(len(transactions), 1)
+        self.assertEqual(transactions[0].payee_name, "Blinkit")
+
+    def test_delete_in_use_category_can_delete_associated_transactions(self) -> None:
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-10.00",
+            spent_on="2026-03-01",
+        )
+
+        self.tracker.delete_category("General", delete_transactions=True)
+
+        self.assertEqual(self.tracker.list_transactions(), [])
+        self.assertNotIn("General", self.tracker.metadata_snapshot().categories)
+
+    def test_legacy_json_file_is_migrated_to_sqlite(self) -> None:
+        self.data_file.write_text(
+            json.dumps(
+                {
+                    "accounts": [{"id": "account-cash", "name": "Cash"}],
+                    "payees": [{"id": "payee-amazon", "name": "Amazon", "linked_account_id": None}],
+                    "categories": [{"id": "category-general", "name": "General"}],
+                    "subcategories": [{"id": "subcategory-delivery", "name": "Delivery", "category_id": "category-general"}],
+                    "transactions": [
+                        {
+                            "id": "txn-1",
+                            "entry_type": "expense",
+                            "account_id": "account-cash",
+                            "payee_id": "payee-amazon",
+                            "category_id": "category-general",
+                            "subcategory_id": "subcategory-delivery",
+                            "amount": "-14.50",
+                            "notes": "Order #1",
+                            "spent_on": "2026-03-10",
+                            "created_at": datetime(2026, 3, 10, 12, 0, 0).isoformat(),
+                            "linked_transaction_id": None,
+                            "transfer_group_id": None,
+                        }
+                    ],
+                    "attachments": [],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        tracker = ExpenseTracker(self.data_file)
+        transactions = tracker.list_transactions()
+
+        self.assertEqual(len(transactions), 1)
+        self.assertEqual(transactions[0].payee_name, "Amazon")
+        self.assertTrue(self.data_file.read_bytes().startswith(b"SQLite format 3"))
+        self.assertTrue(Path(f"{self.data_file}.bak").exists())
+
+    def test_default_ledger_db_migrates_sibling_legacy_json(self) -> None:
+        legacy_json = self.data_file.parent / "ledger.json"
+        target_db = self.data_file.parent / "ledger.db"
+        legacy_json.write_text(
+            json.dumps(
+                {
+                    "accounts": [{"id": "account-credit", "name": "Credit"}],
+                    "payees": [{"id": "payee-pharmacy", "name": "Pharmacy", "linked_account_id": None}],
+                    "categories": [{"id": "category-medical", "name": "Medical"}],
+                    "subcategories": [{"id": "subcategory-meds", "name": "Meds", "category_id": "category-medical"}],
+                    "transactions": [
+                        {
+                            "id": "txn-2",
+                            "entry_type": "expense",
+                            "account_id": "account-credit",
+                            "payee_id": "payee-pharmacy",
+                            "category_id": "category-medical",
+                            "subcategory_id": "subcategory-meds",
+                            "amount": "-35.00",
+                            "notes": "Prescription",
+                            "spent_on": "2026-03-15",
+                            "created_at": datetime(2026, 3, 15, 12, 0, 0).isoformat(),
+                            "linked_transaction_id": None,
+                            "transfer_group_id": None,
+                        }
+                    ],
+                    "attachments": [],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        tracker = ExpenseTracker(target_db)
+        transactions = tracker.list_transactions()
+
+        self.assertEqual(len(transactions), 1)
+        self.assertEqual(transactions[0].account_name, "Credit")
+        self.assertTrue(target_db.read_bytes().startswith(b"SQLite format 3"))
+        self.assertFalse(legacy_json.exists())
+        self.assertTrue(Path(f"{legacy_json}.bak").exists())
+
+    def test_import_legacy_csv_replaces_existing_ledger_and_scopes_subcategories(self) -> None:
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Demo",
+            category_name="General",
+            subcategory_name="Old",
+            amount="-5.00",
+            spent_on="2026-03-01",
+        )
+        csv_file = Path(self.temp_dir.name) / "legacy.csv"
+        with csv_file.open("w", newline="", encoding="utf-8") as handle:
+            writer = DictWriter(handle, fieldnames=["Account", "Date", "Payee", "Notes", "Category", "Amount", "Split_Amount", "Cleared"])
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "Account": "HDFC",
+                    "Date": "2026-03-02",
+                    "Payee": "Amazon",
+                    "Notes": "Ref 123",
+                    "Category": "General:Common",
+                    "Amount": "-250.00",
+                    "Split_Amount": "",
+                    "Cleared": "Y",
+                }
+            )
+            writer.writerow(
+                {
+                    "Account": "HDFC",
+                    "Date": "2026-03-03",
+                    "Payee": "Pharmacy",
+                    "Notes": "Ref 456",
+                    "Category": "Medical:Common",
+                    "Amount": "-50.00",
+                    "Split_Amount": "",
+                    "Cleared": "Y",
+                }
+            )
+
+        summary = self.tracker.import_legacy_csv(csv_file)
+        transactions = self.tracker.list_transactions()
+        metadata = self.tracker.metadata_snapshot()
+
+        self.assertEqual(summary["transactions"], 2)
+        self.assertEqual(len(transactions), 2)
+        self.assertEqual({item.payee_name for item in transactions}, {"Amazon", "Pharmacy"})
+        self.assertNotIn("Demo", {item.payee_name for item in transactions})
+        self.assertEqual(metadata.subcategories_by_category["General"], ["Common"])
+        self.assertEqual(metadata.subcategories_by_category["Medical"], ["Common"])
 
 
 if __name__ == "__main__":

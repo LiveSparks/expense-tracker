@@ -19,7 +19,7 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
             account_name="Cash",
             payee_name="Shop 1",
             category_name="General",
-            amount="10.00",
+            amount="-10.00",
             spent_on="2026-03-01",
         )
         metadata = self.tracker.metadata_snapshot()
@@ -28,14 +28,23 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
         self.assertIn("Cash", metadata.payees)
 
     def test_transfer_creates_opposite_transaction_and_balances(self) -> None:
+        self.tracker.add_transaction(
+            account_name="HDFC",
+            payee_name="Opening Balance",
+            category_name="Income",
+            amount="1.00",
+            spent_on="2026-03-01",
+        )
+        opening_id = self.tracker.list_transactions(account="HDFC")[0].id
+        self.tracker.delete_transaction(opening_id)
+
         created = self.tracker.add_transaction(
             account_name="Cash",
             payee_name="HDFC",
             category_name="General",
-            amount="200.00",
+            amount="250.00",
             spent_on="2026-03-02",
             notes="Move to bank",
-            transaction_type="transfer",
         )
 
         self.assertEqual(len(created), 2)
@@ -46,13 +55,32 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
         self.assertEqual(balances["Cash"], created[0].amount)
         self.assertEqual(balances["HDFC"], created[1].amount)
 
+    def test_amount_sign_controls_income_vs_expense(self) -> None:
+        income = self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Employer",
+            category_name="Income",
+            amount="100.00",
+            spent_on="2026-03-01",
+        )[0]
+        expense = self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Cafe",
+            category_name="General",
+            amount="-8.50",
+            spent_on="2026-03-02",
+        )[0]
+
+        self.assertEqual(income.entry_type, "income")
+        self.assertEqual(expense.entry_type, "expense")
+
     def test_filters_by_account_payee_and_date_range(self) -> None:
         self.tracker.add_transaction(
             account_name="Cash",
             payee_name="Amazon",
             category_name="General",
             subcategory_name="Delivery",
-            amount="20.00",
+            amount="-20.00",
             spent_on="2026-03-01",
         )
         self.tracker.add_transaction(
@@ -60,7 +88,7 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
             payee_name="Pharmacy",
             category_name="Medical",
             subcategory_name="Meds",
-            amount="35.00",
+            amount="-35.00",
             spent_on="2026-03-15",
         )
 
@@ -83,7 +111,7 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
             account_name="Cash",
             payee_name="Amazon",
             category_name="General",
-            amount="9.99",
+            amount="-9.99",
             spent_on="2026-03-11",
             attachment_paths=[str(receipt_path)],
         )
@@ -94,13 +122,22 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
         self.assertEqual(stored_path.read_text(encoding="utf-8"), "receipt data")
 
     def test_deleting_one_transfer_side_removes_both_transactions(self) -> None:
+        self.tracker.add_transaction(
+            account_name="HDFC",
+            payee_name="Opening Balance",
+            category_name="Income",
+            amount="1.00",
+            spent_on="2026-03-01",
+        )
+        opening_id = self.tracker.list_transactions(account="HDFC")[0].id
+        self.tracker.delete_transaction(opening_id)
+
         created = self.tracker.add_transaction(
             account_name="Cash",
             payee_name="HDFC",
             category_name="General",
             amount="25.00",
             spent_on="2026-03-02",
-            transaction_type="transfer",
         )
 
         deleted = self.tracker.delete_transaction(created[0].id)

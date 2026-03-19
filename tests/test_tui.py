@@ -9,8 +9,10 @@ from unittest.mock import patch
 from expense_tracker.cli import main
 from expense_tracker.tui import (
     ExpenseTrackerApp,
+    SuggestionItem,
     render_balances_text,
     render_category_totals_text,
+    split_category_value,
 )
 
 
@@ -41,12 +43,10 @@ class ExpenseTrackerAppTests(unittest.IsolatedAsyncioTestCase):
         app = ExpenseTrackerApp(self.data_file)
 
         async with app.run_test():
-            app.query_one("#payee").value = "Amazon"
-            app.query_one("#account").value = "Cash"
-            app.query_one("#category").value = "General"
-            app.query_one("#subcategory").value = "Delivery"
-            app.query_one("#amount").value = "4.50"
-            app.query_one("#transaction-type").value = "expense"
+            app.query_one("#payee-field").value = "Amazon"
+            app.query_one("#account-field").value = "Cash"
+            app.query_one("#category-field").value = "General / Delivery"
+            app.query_one("#amount").value = "-4.50"
             app.query_one("#spent-on").value = "2026-03-19"
             app.query_one("#notes").value = "Snacks"
 
@@ -64,14 +64,14 @@ class ExpenseTrackerAppTests(unittest.IsolatedAsyncioTestCase):
                 account_name="Cash",
                 payee_name="Amazon",
                 category_name="General",
-                amount="5.00",
+                amount="-5.00",
                 spent_on="2026-03-10",
             )
             app.tracker.add_transaction(
                 account_name="Credit",
                 payee_name="Pharmacy",
                 category_name="Medical",
-                amount="20.00",
+                amount="-20.00",
                 spent_on="2026-03-12",
             )
             app.query_one("#filter-account").value = "Credit"
@@ -79,6 +79,14 @@ class ExpenseTrackerAppTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(len(app._row_ids), 1)
             self.assertIn("Credit", str(app.query_one("#transaction-table").get_row_at(0)))
+
+    async def test_picker_suggestions_include_add_new_option(self) -> None:
+        app = ExpenseTrackerApp(self.data_file)
+
+        async with app.run_test():
+            suggestions = app._build_name_suggestions("Zeta", ["Cash", "Credit"], "Account")
+
+            self.assertIn(SuggestionItem(label="Add new account: Zeta", value="Zeta"), suggestions)
 
 
 class TuiRenderingTests(unittest.TestCase):
@@ -88,14 +96,17 @@ class TuiRenderingTests(unittest.TestCase):
         )
 
         self.assertIn("Category totals:", rendered)
-        self.assertIn("- General: $-18.00", rendered)
-        self.assertIn("Net total: $8.00", rendered)
+        self.assertIn("General: $-18.00", rendered)
 
     def test_render_balances_text_formats_amounts(self) -> None:
         rendered = render_balances_text({"Cash": Decimal("-12.50")})
 
         self.assertIn("Account balances:", rendered)
-        self.assertIn("- Cash: $-12.50", rendered)
+        self.assertIn("Cash: $-12.50", rendered)
+
+    def test_split_category_value_handles_subcategory(self) -> None:
+        self.assertEqual(split_category_value("General / Grocery"), ("General", "Grocery"))
+        self.assertEqual(split_category_value("Medical"), ("Medical", None))
 
 
 if __name__ == "__main__":

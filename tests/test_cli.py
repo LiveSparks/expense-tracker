@@ -34,7 +34,7 @@ class ExpenseTrackerCliTests(unittest.TestCase):
             "--subcategory",
             "Delivery",
             "--amount",
-            "14.50",
+            "-14.50",
             "--date",
             "2026-03-10",
             "--notes",
@@ -62,8 +62,6 @@ class ExpenseTrackerCliTests(unittest.TestCase):
             "Salary",
             "--amount",
             "1000.00",
-            "--type",
-            "income",
             "--date",
             "2026-03-01",
         )
@@ -78,7 +76,7 @@ class ExpenseTrackerCliTests(unittest.TestCase):
             "--subcategory",
             "Grocery",
             "--amount",
-            "120.00",
+            "-120.00",
             "--date",
             "2026-03-02",
         )
@@ -98,7 +96,7 @@ class ExpenseTrackerCliTests(unittest.TestCase):
             "--category",
             "General",
             "--amount",
-            "18.00",
+            "-18.00",
             "--date",
             "2026-03-05",
         )

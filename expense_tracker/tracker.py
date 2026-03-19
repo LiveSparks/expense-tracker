@@ -57,23 +57,15 @@ class ExpenseTracker:
         amount: str,
         spent_on: str,
         notes: str = "",
-        transaction_type: str = "expense",
         attachment_paths: Sequence[str] | None = None,
     ) -> list[TransactionRecord]:
         ledger = self.storage.load()
         account = self._get_or_create_account(ledger, account_name)
         payee = self._get_or_create_payee(ledger, payee_name)
         created_at = datetime.now(UTC)
-        parsed_amount = self._parse_amount(amount)
+        parsed_amount = self._parse_signed_amount(amount)
         parsed_date = self._parse_date(spent_on)
         normalized_notes = notes.strip()
-
-        if transaction_type not in {"expense", "income", "transfer"}:
-            raise ValueError("Transaction type must be expense, income, or transfer.")
-
-        if transaction_type == "transfer" and payee.linked_account_id is None:
-            destination_account = self._get_or_create_account(ledger, payee_name)
-            payee = self._ensure_linked_payee(ledger, destination_account)
 
         if payee.linked_account_id == account.id:
             raise ValueError("Source and destination accounts must be different.")
@@ -86,6 +78,7 @@ class ExpenseTracker:
                 "Transfer",
                 transfer_category.id,
             )
+            transfer_amount = abs(parsed_amount)
             transfer_group_id = str(uuid4())
             source_transaction = Transaction(
                 id=str(uuid4()),
@@ -93,8 +86,8 @@ class ExpenseTracker:
                 account_id=account.id,
                 payee_id=payee.id,
                 category_id=transfer_category.id,
-                subcategory_id=transfer_subcategory.id,
-                amount=-parsed_amount,
+                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
+                amount=-transfer_amount,
                 notes=normalized_notes,
                 spent_on=parsed_date,
                 created_at=created_at,
@@ -108,8 +101,8 @@ class ExpenseTracker:
                 account_id=destination_account.id,
                 payee_id=source_account_payee.id,
                 category_id=transfer_category.id,
-                subcategory_id=transfer_subcategory.id,
-                amount=parsed_amount,
+                subcategory_id=transfer_subcategory.id if transfer_subcategory is not None else None,
+                amount=transfer_amount,
                 notes=normalized_notes,
                 spent_on=parsed_date,
                 created_at=created_at,
@@ -126,15 +119,15 @@ class ExpenseTracker:
                 subcategory_name,
                 category.id,
             )
-            signed_amount = parsed_amount if transaction_type == "income" else -parsed_amount
+            entry_type = "income" if parsed_amount > Decimal("0.00") else "expense"
             transaction = Transaction(
                 id=str(uuid4()),
-                entry_type=transaction_type,
+                entry_type=entry_type,
                 account_id=account.id,
                 payee_id=payee.id,
                 category_id=category.id,
                 subcategory_id=subcategory.id if subcategory is not None else None,
-                amount=signed_amount,
+                amount=parsed_amount,
                 notes=normalized_notes,
                 spent_on=parsed_date,
                 created_at=created_at,
@@ -432,13 +425,13 @@ class ExpenseTracker:
             raise ValueError(f"{field_name} is required.")
         return normalized
 
-    def _parse_amount(self, value: str) -> Decimal:
+    def _parse_signed_amount(self, value: str) -> Decimal:
         try:
             amount = Decimal(value).quantize(Decimal("0.01"))
         except InvalidOperation as exc:
             raise ValueError("Amount must be a valid number.") from exc
-        if amount <= Decimal("0.00"):
-            raise ValueError("Amount must be greater than zero.")
+        if amount == Decimal("0.00"):
+            raise ValueError("Amount must be non-zero.")
         return amount
 
     def _parse_date(self, value: str) -> date:

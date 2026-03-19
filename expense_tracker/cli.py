@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
@@ -34,8 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--category", required=True)
     add_parser.add_argument("--subcategory")
     add_parser.add_argument("--amount", required=True)
-    add_parser.add_argument("--type", choices=["expense", "income", "transfer"], default="expense")
-    add_parser.add_argument("--date", default=date.today().isoformat())
+    add_parser.add_argument("--date", required=True)
     add_parser.add_argument("--notes", default="")
     add_parser.add_argument("--attachment", action="append", default=[])
 
@@ -124,7 +122,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 amount=args.amount,
                 spent_on=args.date,
                 notes=args.notes,
-                transaction_type=args.type,
                 attachment_paths=args.attachment,
             )
             if len(created) == 2:

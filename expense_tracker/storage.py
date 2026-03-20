@@ -69,67 +69,74 @@ class LedgerStorage:
     def save(self, ledger: LedgerData) -> None:
         self._ensure_database()
         with sqlite_connection(self.data_file) as connection:
-            connection.execute("DELETE FROM attachments")
-            connection.execute("DELETE FROM transactions")
-            connection.execute("DELETE FROM payees")
-            connection.execute("DELETE FROM accounts")
-            connection.execute("DELETE FROM subcategories")
-            connection.execute("DELETE FROM categories")
+            connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                connection.execute("DELETE FROM attachments")
+                connection.execute("DELETE FROM transactions")
+                connection.execute("DELETE FROM payees")
+                connection.execute("DELETE FROM accounts")
+                connection.execute("DELETE FROM subcategories")
+                connection.execute("DELETE FROM categories")
 
-            connection.executemany(
-                "INSERT INTO accounts (id, name) VALUES (?, ?)",
-                [(account.id, account.name) for account in ledger.accounts],
-            )
-            connection.executemany(
-                "INSERT INTO categories (id, name) VALUES (?, ?)",
-                [(category.id, category.name) for category in ledger.categories],
-            )
-            connection.executemany(
-                "INSERT INTO subcategories (id, name, category_id) VALUES (?, ?, ?)",
-                [(subcategory.id, subcategory.name, subcategory.category_id) for subcategory in ledger.subcategories],
-            )
-            connection.executemany(
-                "INSERT INTO payees (id, name, linked_account_id) VALUES (?, ?, ?)",
-                [(payee.id, payee.name, payee.linked_account_id) for payee in ledger.payees],
-            )
-            connection.executemany(
-                """
-                INSERT INTO transactions (
-                    id, entry_type, account_id, payee_id, category_id, subcategory_id,
-                    amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        transaction.id,
-                        transaction.entry_type,
-                        transaction.account_id,
-                        transaction.payee_id,
-                        transaction.category_id,
-                        transaction.subcategory_id,
-                        f"{transaction.amount:.2f}",
-                        transaction.notes,
-                        transaction.spent_on.isoformat(),
-                        transaction.created_at.isoformat(),
-                        transaction.linked_transaction_id,
-                        transaction.transfer_group_id,
-                    )
-                    for transaction in ledger.transactions
-                ],
-            )
-            connection.executemany(
-                "INSERT INTO attachments (id, transaction_id, original_name, stored_path, uploaded_at) VALUES (?, ?, ?, ?, ?)",
-                [
-                    (
-                        attachment.id,
-                        attachment.transaction_id,
-                        attachment.original_name,
-                        attachment.stored_path,
-                        attachment.uploaded_at.isoformat(),
-                    )
-                    for attachment in ledger.attachments
-                ],
-            )
+                connection.executemany(
+                    "INSERT INTO accounts (id, name) VALUES (?, ?)",
+                    [(account.id, account.name) for account in ledger.accounts],
+                )
+                connection.executemany(
+                    "INSERT INTO categories (id, name) VALUES (?, ?)",
+                    [(category.id, category.name) for category in ledger.categories],
+                )
+                connection.executemany(
+                    "INSERT INTO subcategories (id, name, category_id) VALUES (?, ?, ?)",
+                    [(subcategory.id, subcategory.name, subcategory.category_id) for subcategory in ledger.subcategories],
+                )
+                connection.executemany(
+                    "INSERT INTO payees (id, name, linked_account_id) VALUES (?, ?, ?)",
+                    [(payee.id, payee.name, payee.linked_account_id) for payee in ledger.payees],
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO transactions (
+                        id, entry_type, account_id, payee_id, category_id, subcategory_id,
+                        amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            transaction.id,
+                            transaction.entry_type,
+                            transaction.account_id,
+                            transaction.payee_id,
+                            transaction.category_id,
+                            transaction.subcategory_id,
+                            f"{transaction.amount:.2f}",
+                            transaction.notes,
+                            transaction.spent_on.isoformat(),
+                            transaction.created_at.isoformat(),
+                            transaction.linked_transaction_id,
+                            transaction.transfer_group_id,
+                        )
+                        for transaction in ledger.transactions
+                    ],
+                )
+                connection.executemany(
+                    "INSERT INTO attachments (id, transaction_id, original_name, stored_path, uploaded_at) VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            attachment.id,
+                            attachment.transaction_id,
+                            attachment.original_name,
+                            attachment.stored_path,
+                            attachment.uploaded_at.isoformat(),
+                        )
+                        for attachment in ledger.attachments
+                    ],
+                )
+            finally:
+                connection.execute("PRAGMA foreign_keys = ON")
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError("Foreign key check failed after saving ledger.")
     def _ensure_database(self) -> None:
         legacy_ledger = self._load_legacy_json_if_needed()
         with sqlite_connection(self.data_file) as connection:

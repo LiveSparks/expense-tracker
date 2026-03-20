@@ -66,6 +66,7 @@ a { color: inherit; text-decoration: none; }
 .amount.negative, .account-balance.negative { color: var(--negative); }
 .empty-card { color: var(--muted); }
 .summary-strip { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0 0.2rem 0.55rem; color: var(--muted); font-size: 0.84rem; }
+.review-queue-strip { flex-wrap: wrap; }
 .search-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.45rem; margin: 0 0 0.65rem; }
 .filter-drawer { margin: 0 0 0.65rem; background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }
 .filter-drawer summary { cursor: pointer; list-style: none; padding: 0.78rem 0.9rem; font-weight: 600; }
@@ -114,6 +115,19 @@ textarea { min-height: 5.4rem; resize: vertical; }
 .date-group-list { display: grid; gap: 0.35rem; }
 .compact-transaction { padding: 0.72rem 0.8rem; border-radius: 12px; }
 .review-summary-grid { margin-top: 0.55rem; }
+.review-card-link { color: inherit; text-decoration: none; }
+.review-card-actions { display: grid; gap: 0.45rem; justify-items: end; flex-shrink: 0; }
+.review-action-buttons { display: flex; gap: 0.35rem; }
+.code-block {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: #111827;
+  color: #f3f4f6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .transaction-main-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.65rem; }
 .transaction-main-text { min-width: 0; display: grid; gap: 0.14rem; }
 .transaction-primary { display: block; font-size: 0.95rem; line-height: 1.2; }
@@ -137,6 +151,8 @@ textarea { min-height: 5.4rem; resize: vertical; }
 .review-list { margin: 0; padding-left: 1rem; color: var(--muted); font-size: 0.82rem; }
 .attachment-pills { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.1rem; }
 .attachment-pill { display: inline-flex; align-items: center; padding: 0.14rem 0.4rem; border-radius: 999px; background: var(--card-alt); color: var(--primary); font-size: 0.72rem; }
+.sms-history-panel { display: grid; gap: 0.45rem; }
+.sms-history-card { gap: 0.35rem; }
 .selectable-transaction { cursor: pointer; user-select: none; transition: border-color 120ms ease, transform 120ms ease, background 120ms ease; }
 .selectable-transaction:active { transform: scale(0.995); }
 .selectable-transaction.is-selected { border-color: var(--primary); background: color-mix(in srgb, var(--card-alt) 86%, white); }

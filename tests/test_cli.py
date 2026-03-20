@@ -187,6 +187,41 @@ class ExpenseTrackerCliTests(unittest.TestCase):
         self.assertIn("Amazon", list_output)
         self.assertNotIn("Demo", list_output)
 
+    def test_import_sms_history_command_populates_sms_store(self) -> None:
+        self.run_cli(
+            "add",
+            "--account",
+            "HDFC Savings 2054",
+            "--payee",
+            "Amazon",
+            "--category",
+            "General",
+            "--subcategory",
+            "Delivery",
+            "--amount",
+            "-499.00",
+            "--date",
+            "2026-03-20",
+            "--notes",
+            "- Ref: 552880661565",
+        )
+        sms_csv = Path(self.temp_dir.name) / "conversations.csv"
+        sms_csv.write_text(
+            "\n".join(
+                [
+                    "Exported on 2026-03-20 10:33 with SMS Exporter android app https://smartpositive.com/sms-exporter",
+                    "",
+                    "Date,Time,Direction,Contact,Phone,Content,Type",
+                    "2026-03-20,09:01:10,Received,JM-HDFCBK-S,JM-HDFCBK-S,Sent Rs.499.00 From HDFC Bank A/C *2054 To Amazon Seller Services On 20/03/26 Ref 552880661565,SMS",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        output = self.run_cli("import-sms-history", "--sms-csv", str(sms_csv))
+
+        self.assertIn("1 total, 1 useful, 1 matched", output)
+
 
 if __name__ == "__main__":
     unittest.main()

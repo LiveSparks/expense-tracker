@@ -51,13 +51,13 @@
   </form>
 </details>
 <section class="summary-strip compact-summary"><span>{{ total_amount|currency }}</span><span>{{ transactions|length }} items</span></section>
-<section class="list-stack dense-list transaction-selection" data-selection-root>
+<section class="list-stack dense-list transaction-selection" data-selection-root data-scroll-restore-key="{{ current_url }}">
   {% for group in grouped_transactions %}
     <section class="date-group" data-date-group>
-      <button class="date-group-label" type="button" data-date-group-toggle>{{ group.date }}</button>
+      <button class="date-group-label" type="button" data-date-group-toggle>{{ group.date_label }}</button>
       <div class="date-group-list">
         {% for transaction in group.transactions %}
-          <article class="transaction-card compact-transaction selectable-transaction" data-transaction-id="{{ transaction.id }}" data-edit-url="/transactions/{{ transaction.id }}/edit" tabindex="0">
+          <article class="transaction-card compact-transaction selectable-transaction" data-transaction-id="{{ transaction.id }}" data-edit-url="/transactions/{{ transaction.id }}/edit?return_to={{ current_url | urlencode }}" tabindex="0">
             <div class="transaction-main-row">
               <div class="transaction-main-text">
                 <strong class="transaction-primary">{{ transaction.payee_name }}</strong>
@@ -77,7 +77,7 @@
     <div class="empty-card">No transactions match the current filters.</div>
   {% endfor %}
 </section>
-<form id="bulk-action-form" class="bulk-action-bar" method="post" action="/transactions/bulk" data-bulk-form>
+<form id="bulk-action-form" class="bulk-action-bar" method="post" action="/transactions/bulk" data-bulk-form data-preserve-scroll>
   <input type="hidden" name="return_to" value="{{ current_url }}">
   <div class="bulk-top-row">
     <strong data-selection-count>0 selected</strong>

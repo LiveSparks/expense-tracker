@@ -7,6 +7,9 @@ from csv import DictWriter
 from datetime import datetime
 from pathlib import Path
 
+from expense_tracker.sms_history import SmsHistoryStore
+from expense_tracker.sms_pipeline import SmsMessage, extract_sms_markers
+from expense_tracker.sqlite_utils import sqlite_connection
 from expense_tracker.tracker import ExpenseTracker
 
 
@@ -106,6 +109,20 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
         self.assertEqual(filtered[0].account_name, "Credit")
         self.assertEqual(filtered[0].payee_name, "Pharmacy")
 
+    def test_filters_accept_dd_mm_yyyy_dates(self) -> None:
+        self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-20.00",
+            spent_on="2026-03-01",
+        )
+
+        filtered = self.tracker.list_transactions(start_date="01/03/2026", end_date="02/03/2026")
+
+        self.assertEqual(len(filtered), 1)
+
     def test_attachment_is_copied_locally(self) -> None:
         receipt_path = Path(self.temp_dir.name) / "receipt.txt"
         receipt_path.write_text("receipt data", encoding="utf-8")
@@ -175,6 +192,84 @@ class ExpenseTrackerDomainTests(unittest.TestCase):
 
         self.assertTrue(deleted)
         self.assertEqual(self.tracker.list_transactions(), [])
+
+    def test_delete_transaction_clears_linked_sms_history(self) -> None:
+        created = self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-25.00",
+            spent_on="2026-03-02",
+        )[0]
+        sms = SmsMessage(
+            row_number=1,
+            received_at=datetime(2026, 3, 2, 9, 0, 0),
+            direction="Received",
+            contact="JM-HDFCBK-S",
+            phone="JM-HDFCBK-S",
+            content="Sent Rs.25.00 From HDFC Bank A/C *2054 To Amazon On 02/03/26 Ref 12345",
+            message_type="SMS",
+        )
+        SmsHistoryStore(self.data_file).record_approved_review(
+            sender=sms.contact,
+            phone=sms.phone,
+            content=sms.content,
+            received_at=sms.received_at,
+            markers_payload=extract_sms_markers(sms).to_dict(),
+            matched_transaction_id=created.id,
+        )
+
+        deleted = self.tracker.delete_transaction(created.id)
+
+        self.assertTrue(deleted)
+        with sqlite_connection(self.data_file) as connection:
+            matched_transaction_id = connection.execute(
+                "SELECT matched_transaction_id FROM sms_messages LIMIT 1"
+            ).fetchone()[0]
+        self.assertIsNone(matched_transaction_id)
+
+    def test_delete_transaction_succeeds_when_other_sms_links_exist(self) -> None:
+        first = self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-25.00",
+            spent_on="2026-03-02",
+        )[0]
+        second = self.tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Pharmacy",
+            category_name="Medical",
+            subcategory_name="Meds",
+            amount="-40.00",
+            spent_on="2026-03-03",
+        )[0]
+        sms = SmsMessage(
+            row_number=2,
+            received_at=datetime(2026, 3, 3, 9, 0, 0),
+            direction="Received",
+            contact="JM-HDFCBK-S",
+            phone="JM-HDFCBK-S",
+            content="Sent Rs.40.00 From HDFC Bank A/C *2054 To Pharmacy On 03/03/26 Ref 55555",
+            message_type="SMS",
+        )
+        SmsHistoryStore(self.data_file).record_approved_review(
+            sender=sms.contact,
+            phone=sms.phone,
+            content=sms.content,
+            received_at=sms.received_at,
+            markers_payload=extract_sms_markers(sms).to_dict(),
+            matched_transaction_id=second.id,
+        )
+
+        deleted = self.tracker.delete_transaction(first.id)
+
+        self.assertTrue(deleted)
+        remaining = self.tracker.list_transactions()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].id, second.id)
 
     def test_delete_in_use_payee_can_migrate_transactions(self) -> None:
         self.tracker.add_transaction(

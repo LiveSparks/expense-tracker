@@ -101,6 +101,38 @@ function initPicker(root) {
   });
 }
 
+function scrollStorageKey(key) {
+  return `scroll:${key}`;
+}
+
+function saveScrollPosition(key) {
+  if (!key) {
+    return;
+  }
+  window.sessionStorage.setItem(scrollStorageKey(key), String(window.scrollY));
+}
+
+function initScrollRestoration() {
+  const scrollRoot = document.querySelector('[data-scroll-restore-key]');
+  if (!scrollRoot) {
+    return;
+  }
+  const key = scrollRoot.dataset.scrollRestoreKey;
+  const saved = window.sessionStorage.getItem(scrollStorageKey(key));
+  if (saved !== null) {
+    window.scrollTo(0, Number(saved));
+    window.sessionStorage.removeItem(scrollStorageKey(key));
+  }
+  document.querySelectorAll('[data-preserve-scroll]').forEach((node) => {
+    const save = () => saveScrollPosition(key);
+    if (node.tagName === 'FORM') {
+      node.addEventListener('submit', save);
+    } else {
+      node.addEventListener('click', save);
+    }
+  });
+}
+
 function initCategoryDialog() {
   const dialog = document.querySelector('[data-category-dialog]');
   const openButton = document.querySelector('[data-open-category-dialog]');
@@ -139,6 +171,7 @@ function initSelectionMode() {
   }
 
   const selected = new Set();
+  const scrollKey = root.dataset.scrollRestoreKey;
   const inputsRoot = bulkForm.querySelector('[data-selection-inputs]');
   const countNode = bulkForm.querySelector('[data-selection-count]');
   const clearButton = bulkForm.querySelector('[data-clear-selection]');
@@ -217,6 +250,7 @@ function initSelectionMode() {
       }
       const editUrl = row.dataset.editUrl;
       if (editUrl) {
+        saveScrollPosition(scrollKey);
         window.location.href = editUrl;
       }
     });
@@ -229,6 +263,7 @@ function initSelectionMode() {
         }
         const editUrl = row.dataset.editUrl;
         if (editUrl) {
+          saveScrollPosition(scrollKey);
           window.location.href = editUrl;
         }
       }
@@ -402,6 +437,7 @@ function initManageDeleteDialogs() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initScrollRestoration();
   document.querySelectorAll('.js-picker').forEach(initPicker);
   initCategoryDialog();
   initSelectionMode();

@@ -9,14 +9,16 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict
 
 from .models import Account, Category, LedgerData, Payee, Subcategory, Transaction
 
 AMOUNT_PATTERNS = [
-    re.compile(r"(?:paid|sent|spent|debited|credited|received|withdrawn|purchased?)\s+(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)", re.IGNORECASE),
-    re.compile(r"(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)", re.IGNORECASE),
+    re.compile(r"(?:paid|sent|spent|debited|credited|received|withdrawn|purchased?)\s+\b(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)", re.IGNORECASE),
+    re.compile(r"\b(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)", re.IGNORECASE),
 ]
 BALANCE_PATTERN = re.compile(r"(?:balance|bal(?:ance)?)\D+(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 REFERENCE_PATTERN = re.compile(r"\b(?:ref|utr|txn(?:\s*id|#)?|txvr|trxn)\s*[:#-]?\s*([A-Za-z0-9-]{4,})", re.IGNORECASE)
@@ -31,6 +33,23 @@ MERCHANT_PATTERNS = [
 ]
 TIMESTAMP_PATTERN = re.compile(r"(20\d{2}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}|\d{2}/\d{2}/\d{2})")
 FINANCIAL_CONTACT_TOKENS = ("HDFCBK", "ICICI", "SBI", "PNB", "AXIS", "AIRTEL", "PAYTM", "AMAZON", "FASTAG")
+OTP_PATTERN = re.compile(
+    r"\b(?:otp|one[- ]time password|verification code|confirmation code|valid for \d+|do not share|don't share|expired in \d+|confirm(?:ation)? code)\b",
+    re.IGNORECASE,
+)
+REMINDER_PATTERN = re.compile(
+    r"\b(?:reminder|upcoming|due on|auto[- ]?debit|autopay|standing instruction|e-?mandate|will be debited|will be presented)\b",
+    re.IGNORECASE,
+)
+STATEMENT_PATTERN = re.compile(
+    r"\b(?:statement is sent|minimum due|total due|bill payment reminder|late fee|credit card statement)\b",
+    re.IGNORECASE,
+)
+PROMO_OR_SERVICE_PATTERN = re.compile(
+    r"\b(?:kyc|claim it now|subscription free|bonus points|expiring soon|welcome to|complaint has been registered|appointment .* submitted|safe network|recharge now|apple music|fraud and scam|verify your mobile)\b",
+    re.IGNORECASE,
+)
+BOT_MEDIA_PATTERN = re.compile(r"^\[(?:application/|image/|video/|audio/)", re.IGNORECASE)
 TRANSACTION_KEYWORDS = {
     "paid": "debit",
     "sent": "debit",
@@ -48,6 +67,22 @@ TRANSACTION_KEYWORDS = {
     "upi": "transfer",
 }
 GENERIC_PAYEE_BUCKETS = {"shop", "online", "family", "unknown", "petrol"}
+
+
+class ReviewDraftTextFormat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message_kind: Literal["transaction", "non_transactional"]
+    account_name: str
+    payee_name: str
+    category_value: str
+    amount: str
+    spent_on: str
+    notes: str
+    non_transactional_reason: str
+    review_status: Literal["for_review", "filtered"]
+    confidence: float
+    reasoning: list[str]
 
 
 @dataclass(slots=True)
@@ -184,10 +219,33 @@ def split_category(raw_category: str) -> tuple[str, str]:
 
 
 def parse_sms_datetime(raw_date: str, raw_time: str) -> datetime:
-    normalized = normalize_text(f"{raw_date} {raw_time}").lower().replace("a.m.", "am").replace("p.m.", "pm")
+    normalized_date = normalize_text(raw_date)
+    normalized_time = normalize_text(raw_time)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_date):
+        return datetime.strptime(f"{normalized_date} {normalized_time}", "%Y-%m-%d %H:%M:%S")
+    normalized = normalize_text(f"{normalized_date} {normalized_time}").lower().replace("a.m.", "am").replace("p.m.", "pm")
     normalized = normalized.replace("am", " am").replace("pm", " pm")
     normalized = normalize_text(normalized)
     return datetime.strptime(normalized, "%d/%m/%Y %I:%M:%S %p")
+
+
+def iter_sms_csv_rows(csv_path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with csv_path.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.reader(handle)
+        header: list[str] | None = None
+        rows: list[dict[str, str]] = []
+        for raw_row in reader:
+            if not raw_row or not any(cell.strip() for cell in raw_row):
+                continue
+            if header is None:
+                if raw_row[:7] == ["Date", "Time", "Direction", "Contact", "Phone", "Content", "Type"]:
+                    header = raw_row[:7]
+                continue
+            padded_row = raw_row + [""] * max(0, len(header) - len(raw_row))
+            rows.append({key: value for key, value in zip(header, padded_row)})
+        if header is None:
+            raise ValueError(f"Could not find an SMS CSV header row in {csv_path}.")
+        return header, rows
 
 
 def load_legacy_transactions(csv_path: Path) -> list[LegacyTransaction]:
@@ -214,21 +272,20 @@ def load_legacy_transactions(csv_path: Path) -> list[LegacyTransaction]:
 
 
 def load_sms_messages(csv_path: Path) -> list[SmsMessage]:
-    with csv_path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        messages: list[SmsMessage] = []
-        for row_number, row in enumerate(reader, start=1):
-            messages.append(
-                SmsMessage(
-                    row_number=row_number,
-                    received_at=parse_sms_datetime(row.get("Date", "01/01/1970"), row.get("Time", "12:00:00 am")),
-                    direction=normalize_text(row.get("Direction", "")),
-                    contact=normalize_text(row.get("Contact", "")),
-                    phone=normalize_text(row.get("Phone", "")),
-                    content=normalize_text(row.get("Content", "")),
-                    message_type=normalize_text(row.get("Type", "SMS")) or "SMS",
-                )
+    _, rows = iter_sms_csv_rows(csv_path)
+    messages: list[SmsMessage] = []
+    for row_number, row in enumerate(rows, start=1):
+        messages.append(
+            SmsMessage(
+                row_number=row_number,
+                received_at=parse_sms_datetime(row.get("Date", "01/01/1970"), row.get("Time", "12:00:00 am")),
+                direction=normalize_text(row.get("Direction", "")),
+                contact=normalize_text(row.get("Contact", "")),
+                phone=normalize_text(row.get("Phone", "")),
+                content=normalize_text(row.get("Content", "")),
+                message_type=normalize_text(row.get("Type", "SMS")) or "SMS",
             )
+        )
     return messages
 
 
@@ -271,6 +328,60 @@ def clean_merchant_hint(value: str | None) -> str | None:
     cleaned = normalize_text(value)
     cleaned = re.sub(r"\b(?:txn|txvr|ref)\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" .,-")
     return cleaned or None
+
+
+def is_pending_transaction_reminder(content: str) -> bool:
+    return bool(REMINDER_PATTERN.search(content))
+
+
+def is_otp_message(content: str) -> bool:
+    return bool(OTP_PATTERN.search(content))
+
+
+def is_statement_or_due_message(content: str) -> bool:
+    return bool(STATEMENT_PATTERN.search(content))
+
+
+def is_promo_or_service_message(content: str) -> bool:
+    return bool(PROMO_OR_SERVICE_PATTERN.search(content))
+
+
+def is_bot_media_message(content: str) -> bool:
+    return bool(BOT_MEDIA_PATTERN.search(content.strip()))
+
+
+def is_personal_contact(contact: str) -> bool:
+    normalized = normalize_text(contact)
+    if not normalized:
+        return False
+    if any(token.lower() in normalized.lower() for token in FINANCIAL_CONTACT_TOKENS):
+        return False
+    if "@" in normalized:
+        return False
+    if re.fullmatch(r"[A-Z]{2}-[A-Z0-9-]+", normalized):
+        return False
+    if normalized.isdigit():
+        return False
+    return True
+
+
+def regex_filter_reasons(message: SmsMessage, markers: SmsMarkers) -> list[str]:
+    reasons: list[str] = []
+    if is_bot_media_message(message.content):
+        reasons.append("Bot/media payload was filtered before drafting.")
+    if is_otp_message(message.content):
+        reasons.append("OTP or verification message was filtered before drafting.")
+    if is_personal_contact(message.contact):
+        reasons.append("Message from a personal contact was filtered before drafting.")
+    if is_pending_transaction_reminder(message.content):
+        reasons.append("Reminder or upcoming auto-debit message was filtered before drafting.")
+    if is_statement_or_due_message(message.content):
+        reasons.append("Statement or bill-due message was filtered before drafting.")
+    if is_promo_or_service_message(message.content):
+        reasons.append("Promo, service, or KYC-style message was filtered before drafting.")
+    if not markers.useful:
+        reasons.append("Regex extraction did not classify this message as a useful financial SMS.")
+    return reasons
 
 
 def extract_markers_regex(message: SmsMessage) -> SmsMarkers:
@@ -455,37 +566,13 @@ def build_minimal_note_bullets(markers: SmsMarkers, transaction: LegacyTransacti
 
 
 def build_structured_output_schema() -> dict[str, object]:
+    schema = ReviewDraftTextFormat.model_json_schema()
     return {
         "type": "json_schema",
         "json_schema": {
             "name": "expense_tracker_review_draft",
             "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": [
-                    "account_name",
-                    "payee_name",
-                    "category_value",
-                    "amount",
-                    "spent_on",
-                    "notes",
-                    "review_status",
-                    "confidence",
-                    "reasoning",
-                ],
-                "properties": {
-                    "account_name": {"type": "string"},
-                    "payee_name": {"type": "string"},
-                    "category_value": {"type": "string"},
-                    "amount": {"type": "string"},
-                    "spent_on": {"type": "string"},
-                    "notes": {"type": "string"},
-                    "review_status": {"type": "string", "enum": ["for_review"]},
-                    "confidence": {"type": "number"},
-                    "reasoning": {"type": "array", "items": {"type": "string"}},
-                },
-            },
+            "schema": schema,
         },
     }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import tempfile
 from contextlib import contextmanager
 from datetime import date
@@ -14,13 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .cli import default_data_file
-from .formatting import format_inr
+from .formatting import format_display_date, format_display_datetime, format_inr, format_list_date
 from .review_workflow import ReviewWorkflowStore
+from .sms_history import SmsHistoryStore
 from .tracker import ExpenseTracker
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 TEMPLATES.env.filters["currency"] = format_inr
+TEMPLATES.env.filters["display_date"] = format_display_date
+TEMPLATES.env.filters["display_datetime"] = format_display_datetime
+TEMPLATES.env.filters["list_date"] = format_list_date
 
 
 def category_options_from_tracker(tracker: ExpenseTracker) -> list[str]:
@@ -85,7 +90,7 @@ def group_transactions(transactions) -> list[dict[str, object]]:
     for transaction in transactions:
         key = transaction.spent_on.isoformat()
         if key not in grouped:
-            grouped[key] = {"date": key, "transactions": []}
+            grouped[key] = {"date": key, "date_label": format_list_date(transaction.spent_on), "transactions": []}
         grouped[key]["transactions"].append(transaction)
     return list(grouped.values())
 
@@ -95,6 +100,25 @@ def add_error_query(url: str, message: str) -> str:
     query = [(key, value) for key, value in parse_qsl(split.query, keep_blank_values=True) if key != "error"]
     query.append(("error", message))
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+
+
+def request_relative_url(request: Request) -> str:
+    current_url = request.url.path
+    if request.url.query:
+        current_url = f"{current_url}?{request.url.query}"
+    return current_url
+
+
+def normalize_return_to(return_to: str | None, default: str) -> str:
+    if not return_to:
+        return default
+    split = urlsplit(return_to)
+    if split.scheme or split.netloc:
+        return default
+    path = split.path or default
+    if not path.startswith("/"):
+        return default
+    return urlunsplit(("", "", path, split.query, split.fragment))
 
 
 @contextmanager
@@ -147,6 +171,8 @@ def transaction_form_context(
     selected_payee: str,
     selected_category: str,
     error: str | None,
+    return_to: str | None = None,
+    related_sms_messages: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     metadata = current_tracker.metadata_snapshot()
     payee_picker_options = payee_picker_options_from_tracker(current_tracker)
@@ -171,6 +197,8 @@ def transaction_form_context(
         "selected_category": selected_category,
         "selected_spent_on": transaction.spent_on.isoformat() if transaction else date.today().isoformat(),
         "error": error,
+        "return_to": return_to or (f"/transactions?{urlencode({'account': selected_account})}" if selected_account else "/transactions"),
+        "related_sms_messages": related_sms_messages or [],
     }
 
 
@@ -179,6 +207,8 @@ def review_form_context(
     review,
     *,
     error: str | None,
+    return_to: str,
+    current_url: str,
 ) -> dict[str, object]:
     metadata = current_tracker.metadata_snapshot()
     payee_picker_options = payee_picker_options_from_tracker(current_tracker)
@@ -197,6 +227,8 @@ def review_form_context(
         "selected_spent_on": review.draft_spent_on,
         "selected_notes": review.draft_notes,
         "error": error,
+        "return_to": return_to,
+        "current_url": current_url,
     }
 
 
@@ -208,10 +240,12 @@ def navigation_context(request: Request) -> dict[str, str]:
     return {"add_transaction_href": add_transaction_href}
 
 
-def create_app(data_file: Path | None = None) -> FastAPI:
+def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = False) -> FastAPI:
     app = FastAPI(title="Expense Tracker")
     app.state.data_file = data_file or default_data_file()
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+    review_worker_lock = threading.Lock()
+    review_worker: dict[str, threading.Thread | None] = {"thread": None}
 
     def tracker() -> ExpenseTracker:
         return ExpenseTracker(app.state.data_file)
@@ -219,12 +253,27 @@ def create_app(data_file: Path | None = None) -> FastAPI:
     def review_store() -> ReviewWorkflowStore:
         return ReviewWorkflowStore(app.state.data_file)
 
+    def start_review_worker() -> None:
+        if process_reviews_inline:
+            review_store().process_pending_queue()
+            return
+        worker = review_worker.get("thread")
+        if worker is not None and worker.is_alive():
+            return
+
+        def run_worker() -> None:
+            with review_worker_lock:
+                while review_store().process_pending_queue(max_items=1):
+                    continue
+
+        thread = threading.Thread(target=run_worker, name="sms-review-worker", daemon=True)
+        review_worker["thread"] = thread
+        thread.start()
+
     def transaction_context(request: Request, current_tracker: ExpenseTracker, error: str | None = None, **filters: str | None) -> dict[str, object]:
         metadata = current_tracker.metadata_snapshot()
         transactions = current_tracker.list_transactions(**filters)
-        current_url = request.url.path
-        if request.url.query:
-            current_url = f"{current_url}?{request.url.query}"
+        current_url = request_relative_url(request)
         non_transfer_payees = [
             payee["name"]
             for payee in current_tracker.payee_summaries()
@@ -264,25 +313,37 @@ def create_app(data_file: Path | None = None) -> FastAPI:
 
     @app.get("/reviews")
     def review_list(request: Request, error: str | None = None):
+        current_review_store = review_store()
         return TEMPLATES.TemplateResponse(
             request,
             "reviews.html",
             {
-                "reviews": review_store().list_reviews(),
+                "reviews": current_review_store.list_reviews(),
+                "queue_counts": current_review_store.queue_counts(),
                 "error": error,
+                "current_url": request_relative_url(request),
                 **navigation_context(request),
             },
         )
 
     @app.get("/reviews/{review_id}")
-    def review_detail(request: Request, review_id: str, error: str | None = None):
+    def review_detail(request: Request, review_id: str, error: str | None = None, return_to: str | None = None):
         current_review = review_store().get_review(review_id)
         if current_review is None:
             raise HTTPException(status_code=404, detail="Review item not found")
+        current_url = request_relative_url(request)
+        normalized_return_to = normalize_return_to(return_to, "/reviews")
         return TEMPLATES.TemplateResponse(
             request,
             "review_detail.html",
-            review_form_context(tracker(), current_review, error=error) | navigation_context(request),
+            review_form_context(
+                tracker(),
+                current_review,
+                error=error,
+                return_to=normalized_return_to,
+                current_url=current_url,
+            )
+            | navigation_context(request),
         )
 
     @app.post("/reviews/{review_id}/approve")
@@ -295,12 +356,14 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         amount: str = Form(...),
         spent_on: str = Form(...),
         notes: str = Form(""),
+        return_to: str = Form("/reviews"),
     ):
         current_tracker = tracker()
         current_review_store = review_store()
         current_review = current_review_store.get_review(review_id)
         if current_review is None:
             raise HTTPException(status_code=404, detail="Review item not found")
+        normalized_return_to = normalize_return_to(return_to, "/reviews")
         try:
             current_review_store.approve_review(
                 review_id,
@@ -321,10 +384,54 @@ def create_app(data_file: Path | None = None) -> FastAPI:
             return TEMPLATES.TemplateResponse(
                 request,
                 "review_detail.html",
-                review_form_context(current_tracker, current_review, error=str(exc)) | navigation_context(request),
+                review_form_context(
+                    current_tracker,
+                    current_review,
+                    error=str(exc),
+                    return_to=normalized_return_to,
+                    current_url=request_relative_url(request),
+                )
+                | navigation_context(request),
                 status_code=400,
             )
-        return RedirectResponse("/reviews", status_code=303)
+        return RedirectResponse(normalized_return_to, status_code=303)
+
+    @app.post("/reviews/{review_id}/quick-approve")
+    def quick_approve_review(review_id: str, return_to: str = Form("/reviews")):
+        normalized_return_to = normalize_return_to(return_to, "/reviews")
+        try:
+            review_store().quick_approve_review(review_id)
+        except ValueError as exc:
+            return RedirectResponse(add_error_query(normalized_return_to, str(exc)), status_code=303)
+        return RedirectResponse(normalized_return_to, status_code=303)
+
+    @app.post("/reviews/{review_id}/delete")
+    def delete_review(review_id: str, return_to: str = Form("/reviews")):
+        current_review = review_store().get_review(review_id)
+        if current_review is None:
+            raise HTTPException(status_code=404, detail="Review item not found")
+        review_store().delete_review(review_id)
+        return RedirectResponse(normalize_return_to(return_to, "/reviews"), status_code=303)
+
+    @app.get("/reviews/{review_id}/llm-request")
+    def review_llm_request(request: Request, review_id: str, return_to: str | None = None):
+        current_review = review_store().get_review(review_id)
+        if current_review is None:
+            raise HTTPException(status_code=404, detail="Review item not found")
+        prompt_preview = review_store().llm_request_preview(
+            review_id,
+            metadata=tracker().metadata_snapshot(),
+        )
+        return TEMPLATES.TemplateResponse(
+            request,
+            "review_llm_request.html",
+            {
+                "review": current_review,
+                "prompt_preview": prompt_preview,
+                "return_to": normalize_return_to(return_to, f"/reviews/{review_id}"),
+                **navigation_context(request),
+            },
+        )
 
     @app.get("/transactions")
     def transaction_list(
@@ -356,7 +463,7 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         )
 
     @app.get("/transactions/new")
-    def new_transaction_form(request: Request, account: str | None = None):
+    def new_transaction_form(request: Request, account: str | None = None, return_to: str | None = None):
         current_tracker = tracker()
         return TEMPLATES.TemplateResponse(
             request,
@@ -369,6 +476,7 @@ def create_app(data_file: Path | None = None) -> FastAPI:
                 selected_payee="",
                 selected_category="",
                 error=None,
+                return_to=normalize_return_to(return_to, f"/transactions?{urlencode({'account': account})}" if account else "/transactions"),
             )
             | navigation_context(request),
         )
@@ -382,9 +490,14 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         amount: str = Form(...),
         spent_on: str = Form(...),
         notes: str = Form(""),
+        return_to: str = Form(""),
         files: list[UploadFile] = File(default=[]),
     ):
         current_tracker = tracker()
+        normalized_return_to = normalize_return_to(
+            return_to,
+            f"/transactions?{urlencode({'account': account_name})}" if account_name else "/transactions",
+        )
         try:
             category_name, subcategory_name = require_transaction_subcategory(category_value)
             with saved_uploads(files) as paths:
@@ -410,18 +523,24 @@ def create_app(data_file: Path | None = None) -> FastAPI:
                     selected_payee=payee_name,
                     selected_category=category_value,
                     error=str(exc),
+                    return_to=normalized_return_to,
                 )
                 | navigation_context(request),
                 status_code=400,
             )
-        return RedirectResponse(f"/transactions?{urlencode({'account': account_name})}", status_code=303)
+        return RedirectResponse(normalized_return_to, status_code=303)
 
     @app.get("/transactions/{transaction_id}/edit")
-    def edit_transaction_form(request: Request, transaction_id: str):
+    def edit_transaction_form(request: Request, transaction_id: str, return_to: str | None = None):
         current_tracker = tracker()
         transaction = current_tracker.get_transaction(transaction_id)
         if transaction is None:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        normalized_return_to = normalize_return_to(return_to, f"/transactions?{urlencode({'account': transaction.account_name})}")
+        related_sms_messages = SmsHistoryStore(app.state.data_file).transaction_messages(
+            transaction=transaction,
+            transactions=current_tracker.list_transactions(),
+        )
         selected_category = transaction.category_name
         if transaction.subcategory_name:
             selected_category = f"{selected_category} / {transaction.subcategory_name}"
@@ -436,6 +555,8 @@ def create_app(data_file: Path | None = None) -> FastAPI:
                 selected_payee=transaction.payee_name,
                 selected_category=selected_category,
                 error=None,
+                return_to=normalized_return_to,
+                related_sms_messages=related_sms_messages,
             )
             | navigation_context(request),
         )
@@ -450,9 +571,11 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         amount: str = Form(...),
         spent_on: str = Form(...),
         notes: str = Form(""),
+        return_to: str = Form("/transactions"),
         files: list[UploadFile] = File(default=[]),
     ):
         current_tracker = tracker()
+        normalized_return_to = normalize_return_to(return_to, "/transactions")
         try:
             category_name, subcategory_name = require_transaction_subcategory(category_value)
             with saved_uploads(files) as paths:
@@ -480,11 +603,12 @@ def create_app(data_file: Path | None = None) -> FastAPI:
                     selected_payee=payee_name,
                     selected_category=category_value,
                     error=str(exc),
+                    return_to=normalized_return_to,
                 )
                 | navigation_context(request),
                 status_code=400,
             )
-        return RedirectResponse(f"/transactions?{urlencode({'account': account_name})}", status_code=303)
+        return RedirectResponse(normalized_return_to, status_code=303)
 
     @app.post("/transactions/bulk")
     async def bulk_transactions(
@@ -516,9 +640,9 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         return RedirectResponse(return_to or "/transactions", status_code=303)
 
     @app.post("/transactions/{transaction_id}/delete")
-    def delete_transaction(transaction_id: str):
+    def delete_transaction(transaction_id: str, return_to: str = Form("/transactions")):
         tracker().delete_transaction(transaction_id)
-        return RedirectResponse("/transactions", status_code=303)
+        return RedirectResponse(normalize_return_to(return_to, "/transactions"), status_code=303)
 
     @app.get("/attachments/{transaction_id}/{attachment_name}")
     def attachment_file(transaction_id: str, attachment_name: str):
@@ -700,7 +824,21 @@ def create_app(data_file: Path | None = None) -> FastAPI:
 
     @app.get("/api/reviews")
     def api_reviews(status: str | None = "for_review"):
-        return {"reviews": [item.to_dict() for item in review_store().list_reviews(status=status)]}
+        current_review_store = review_store()
+        return {
+            "reviews": [item.to_dict() for item in current_review_store.list_reviews(status=status)],
+            "queue": current_review_store.queue_counts(),
+        }
+
+    @app.get("/api/reviews/{review_id}/llm-request")
+    def api_review_llm_request(review_id: str):
+        current_review = review_store().get_review(review_id)
+        if current_review is None:
+            raise HTTPException(status_code=404, detail="Review item not found")
+        return review_store().llm_request_preview(
+            review_id,
+            metadata=tracker().metadata_snapshot(),
+        )
 
     @app.post("/api/sms/intake")
     def api_sms_intake(payload: dict = Body(...)):
@@ -709,7 +847,8 @@ def create_app(data_file: Path | None = None) -> FastAPI:
         received_at = str(payload.get("received_at", "")).strip()
         if not content or not sender or not received_at:
             raise HTTPException(status_code=400, detail="sender, content, and received_at are required.")
-        review = review_store().create_review(
+        current_review_store = review_store()
+        review = current_review_store.enqueue_review(
             sender=sender,
             phone=str(payload.get("phone", "")).strip(),
             content=content,
@@ -718,7 +857,9 @@ def create_app(data_file: Path | None = None) -> FastAPI:
             longitude=float(payload["longitude"]) if payload.get("longitude") is not None else None,
             source=str(payload.get("source", "sms_intake")),
         )
-        return {"review": review.to_dict()}
+        start_review_worker()
+        stored_review = current_review_store.get_review(review.id) or review
+        return {"review": stored_review.to_dict(), "queue": current_review_store.queue_counts()}
 
     @app.get("/api/transactions")
     def api_transactions(

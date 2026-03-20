@@ -1,0 +1,51 @@
+Draft a single expense-tracker review result from the SMS, extracted markers, similar history, and allowed metadata values.
+
+Rules:
+- Use structured output only.
+- If the message is clearly not a completed financial transaction, mark it as non-transactional.
+- For non-transactional messages, leave account_name, payee_name, category_value, amount, spent_on, and notes blank.
+- Keep notes minimal and in bullet-list format, Add relevant info like references/transaction IDs, payee name if avaialable. Infer details from historical messages where there was the same payee.
+- For transfers between the user's own accounts, draft only the source-side transfer: set account_name to the debited/source account and payee_name to the destination owned account.
+- Do not draft both legs of an internal transfer because the app creates the sister transaction automatically.
+- Similar history may include multiple SMS messages for one transfer; treat them as evidence for a single logical transfer.
+
+Examples:
+
+1. Card purchase
+SMS: "Sent Rs.499.00 From HDFC Bank A/C *2054 To Amazon On 20/03/26 Ref 552880661565"
+Output shape:
+- message_kind: "transaction"
+- account_name: "HDFC Savings 2054"
+- payee_name: "Amazon"
+- category_value: use the closest matching allowed category from history or metadata
+- amount: "-499.00"
+- spent_on: "2026-03-20"
+- notes: "- Ref: 552880661565"
+- review_status: "for_review"
+
+2. Family Transfer
+SMS: "Sent Rs.4500.00 From HDFC Bank A/C *2054 To APOORVA KHARB On 24/01/26 Ref 602485643175 Not You? Call 18002586161/SMS BLOCK UPI to 7308080808"
+Output shape:
+- message_kind: "transaction"
+- account_name: "HDFC Savings 2054"
+- payee_name: "Family"
+- category_value: "Usual Expenses / General" or the closest allowed transfer category
+- amount: "-4500.00"
+- spent_on: "2026-01-26"
+- notes: "- To Apoorva\n- Ref: 602485643175"
+- review_status: "for_review"
+In this example, you would have received historical transactions that would support what to put in the notes and that Apoorva is family
+
+3. Non-transactional SMS
+SMS: "OTP to verify your mobile is 796589. Do not share this to anyone."
+Output shape:
+- message_kind: "non_transactional"
+- account_name: ""
+- payee_name: ""
+- category_value: ""
+- amount: ""
+- spent_on: ""
+- notes: ""
+- non_transactional_reason: "OTP or verification message."
+- review_status: "filtered"
+

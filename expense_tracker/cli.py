@@ -7,6 +7,7 @@ from typing import Sequence
 
 from .formatting import format_inr
 from .review_workflow import ReviewWorkflowStore
+from .sms_history import SmsHistoryStore
 from .models import TransactionRecord
 from .tracker import ExpenseTracker
 
@@ -78,6 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import-ledger-csv", help="Replace the app database with transactions from a legacy CSV export.")
     import_parser.add_argument("--csv-file", type=Path, default=Path("/root/All-Accounts_2.csv"))
+
+    sms_history_parser = subparsers.add_parser("import-sms-history", help="Import a full SMS export, extract markers, and link messages to existing transactions.")
+    sms_history_parser.add_argument("--sms-csv", type=Path, default=Path("/root/All_Conversations_2026-03-20.csv"))
 
     return parser
 
@@ -220,6 +224,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Imported real ledger "
                 f"({summary['transactions']} transactions, {summary['accounts']} accounts, {summary['payees']} payees, "
                 f"{summary['categories']} categories, {summary['subcategories']} subcategories{skipped_suffix}) from {args.csv_file}."
+            )
+            return 0
+
+        if args.command == "import-sms-history":
+            summary = SmsHistoryStore(args.data_file).import_csv(args.sms_csv, tracker.list_transactions())
+            print(
+                "Imported SMS history "
+                f"({summary.total_messages} total, {summary.useful_messages} useful, "
+                f"{summary.matched_messages} matched, {summary.unmatched_useful_messages} unmatched useful) from {args.sms_csv}."
             )
             return 0
     except ValueError as exc:

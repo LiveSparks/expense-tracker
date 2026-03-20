@@ -132,6 +132,26 @@ class SmsPipelineTests(unittest.TestCase):
         self.assertIn("Artifacts written", buffer.getvalue())
         self.assertTrue((output_dir / "prompt_pack.json").exists())
 
+    def test_loader_supports_new_export_with_preamble(self) -> None:
+        export_csv = self.temp_path / "conversations.csv"
+        export_csv.write_text(
+            "\n".join(
+                [
+                    "Exported on 2026-03-20 10:33 with SMS Exporter android app https://smartpositive.com/sms-exporter",
+                    "",
+                    "Date,Time,Direction,Contact,Phone,Content,Type",
+                    "2026-03-20,09:01:10,Received,JM-HDFCBK-S,JM-HDFCBK-S,Sent Rs.499.00 From HDFC Bank A/C *2054 To Amazon Seller Services On 20/03/26 Ref 552880661565,SMS",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        messages = load_sms_messages(export_csv)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].received_at.isoformat(), "2026-03-20T09:01:10")
+        self.assertEqual(messages[0].contact, "JM-HDFCBK-S")
+
 
 if __name__ == "__main__":
     unittest.main()

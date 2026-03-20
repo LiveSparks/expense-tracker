@@ -3,17 +3,37 @@
 {% block content %}
 <section class="page-head compact-head compact-head-row">
   <h1>Review draft</h1>
-  <a class="button compact-button" href="/reviews">Back</a>
+  <div class="hero-row compact-head-actions">
+    <a class="button compact-button" href="/reviews/{{ review.id }}/llm-request?return_to={{ current_url | urlencode }}">View LLM request</a>
+    <a class="button compact-button" href="{{ return_to }}">Back</a>
+  </div>
 </section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 <section class="transaction-card compact-transaction review-source-card">
   <div class="transaction-main-text">
     <strong class="transaction-primary">{{ review.sender }}</strong>
-    <div class="transaction-meta">{{ review.received_at.strftime('%Y-%m-%d %H:%M') }}{% if review.latitude is not none and review.longitude is not none %} · {{ review.latitude }}, {{ review.longitude }}{% endif %}</div>
+    <div class="transaction-meta">{{ review.received_at|display_datetime }}{% if review.latitude is not none and review.longitude is not none %} · {{ review.latitude }}, {{ review.longitude }}{% endif %}</div>
     <div class="transaction-notes sms-preview">{{ review.content }}</div>
   </div>
 </section>
+<section class="review-panel">
+  <strong>Extracted markers</strong>
+  <div class="attachment-pills">
+    <span class="attachment-pill">Useful: {{ 'yes' if review.markers.useful else 'no' }}</span>
+    <span class="attachment-pill">Kind: {{ review.markers.event_kind or 'unknown' }}</span>
+    {% if review.markers.amount %}<span class="attachment-pill">Amount: {{ review.markers.amount }}</span>{% endif %}
+    {% if review.markers.account_hint %}<span class="attachment-pill">A/C: {{ review.markers.account_hint }}</span>{% endif %}
+    {% if review.markers.merchant_hint %}<span class="attachment-pill">Merchant: {{ review.markers.merchant_hint }}</span>{% endif %}
+    {% if review.markers.reference_hint %}<span class="attachment-pill">Ref: {{ review.markers.reference_hint }}</span>{% endif %}
+    {% if review.markers.timestamp_hint %}<span class="attachment-pill">Time: {{ review.markers.timestamp_hint }}</span>{% endif %}
+    {% if review.markers.balance_hint %}<span class="attachment-pill">Balance: {{ review.markers.balance_hint }}</span>{% endif %}
+  </div>
+  {% if review.markers.matched_keywords %}
+    <div class="transaction-notes">Keywords: {{ review.markers.matched_keywords | join(', ') }}</div>
+  {% endif %}
+</section>
 <form class="stack-form card-form compact-form" method="post" action="/reviews/{{ review.id }}/approve">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
     <input class="picker-input" name="account_name" value="{{ selected_account }}" autocomplete="off" required>
@@ -61,11 +81,11 @@
         {% for item in review.similar_examples %}
           <div class="transaction-card compact-transaction">
             <div class="transaction-main-row">
-              <div class="transaction-main-text">
+              <a class="transaction-main-text review-card-link" href="/transactions/{{ item.transaction_id }}/edit?return_to={{ current_url | urlencode }}">
                 <strong class="transaction-primary">{{ item.payee_name }}</strong>
-                <div class="transaction-meta">{{ item.account_name }} · {{ item.category_value }} · {{ item.spent_on }}</div>
+                <div class="transaction-meta">{{ item.account_name }} · {{ item.category_value }} · {{ item.spent_on|display_date }}</div>
                 {% if item.notes %}<div class="transaction-notes">{{ item.notes }}</div>{% endif %}
-              </div>
+              </a>
               <div class="amount {% if item.amount|float < 0 %}negative{% else %}positive{% endif %}">{{ item.amount|currency }}</div>
             </div>
           </div>
@@ -75,7 +95,11 @@
   {% endif %}
   <div class="split-row compact-gap compact-split actions-row">
     <button class="button primary compact-button" type="submit">Approve transaction</button>
-    <a class="button compact-button" href="/reviews">Cancel</a>
+    <a class="button compact-button" href="{{ return_to }}">Cancel</a>
   </div>
+</form>
+<form method="post" action="/reviews/{{ review.id }}/delete" class="inline-delete-form">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
+  <button class="button danger compact-button full-width" type="submit" data-confirm-message="Delete this review draft?">Delete draft</button>
 </form>
 {% endblock %}

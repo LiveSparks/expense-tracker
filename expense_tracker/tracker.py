@@ -21,6 +21,7 @@ from .models import (
     Transaction,
     TransactionRecord,
 )
+from .sqlite_utils import sqlite_connection
 from .storage import LedgerStorage
 
 
@@ -259,6 +260,17 @@ class ExpenseTracker:
         return total
 
     def _delete_transaction_ids(self, ledger: LedgerData, transaction_ids: set[str]) -> None:
+        if transaction_ids:
+            with sqlite_connection(self.storage.data_file) as connection:
+                sms_table_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sms_messages'"
+                ).fetchone()
+                if sms_table_exists is not None:
+                    placeholders = ", ".join("?" for _ in transaction_ids)
+                    connection.execute(
+                        f"UPDATE sms_messages SET matched_transaction_id = NULL, match_score = 0.0, match_reasons_json = '[]', field_associations_json = '{{}}' WHERE matched_transaction_id IN ({placeholders})",
+                        tuple(transaction_ids),
+                    )
         removed_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id in transaction_ids]
         ledger.transactions = [transaction for transaction in ledger.transactions if transaction.id not in transaction_ids]
         ledger.attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id not in transaction_ids]
@@ -1063,10 +1075,16 @@ class ExpenseTracker:
         return amount
 
     def _parse_date(self, value: str) -> date:
+        normalized = value.strip()
+        if "/" in normalized:
+            try:
+                return datetime.strptime(normalized, "%d/%m/%Y").date()
+            except ValueError:
+                pass
         try:
-            return date.fromisoformat(value)
+            return date.fromisoformat(normalized)
         except ValueError as exc:
-            raise ValueError("Date must use YYYY-MM-DD format.") from exc
+            raise ValueError("Date must use DD/MM/YYYY or YYYY-MM-DD format.") from exc
 
     def _split_legacy_category(self, value: str) -> tuple[str, str]:
         raw_value = value.strip()

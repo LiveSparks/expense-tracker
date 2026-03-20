@@ -3,24 +3,43 @@
 {% block content %}
 <section class="page-head compact-head compact-head-row">
   <h1>For review</h1>
-  <span class="inline-chip">{{ reviews|length }} queued</span>
+  <span class="inline-chip">{{ reviews|length }} ready</span>
 </section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
-<section class="list-stack dense-list">
+<section class="summary-strip review-queue-strip">
+  <span>Queued: {{ queue_counts.queued }}</span>
+  <span>Processing: {{ queue_counts.processing }}</span>
+  <span>Ready: {{ queue_counts.ready }}</span>
+</section>
+<section class="list-stack dense-list" data-scroll-restore-key="{{ current_url }}">
   {% for review in reviews %}
-    <a class="transaction-card compact-transaction review-card" href="/reviews/{{ review.id }}">
+    <article class="transaction-card compact-transaction review-card">
       <div class="transaction-main-row">
-        <div class="transaction-main-text">
+        <a class="transaction-main-text review-card-link" href="/reviews/{{ review.id }}?return_to={{ current_url | urlencode }}" data-preserve-scroll>
           <strong class="transaction-primary">{{ review.draft_payee_name or 'Unresolved payee' }}</strong>
           <div class="transaction-meta">{{ review.draft_account_name or 'No account' }} · {{ review.draft_category_value or 'No category' }}</div>
-          <div class="transaction-notes">{{ review.sender }} · {{ review.received_at.strftime('%Y-%m-%d %H:%M') }}</div>
+          <div class="transaction-notes">{{ review.sender }} · {{ review.received_at|display_datetime }}</div>
           <div class="transaction-notes sms-preview">{{ review.content }}</div>
-        </div>
-        <div class="amount {% if review.draft_amount and review.draft_amount|float < 0 %}negative{% else %}positive{% endif %}">
-          {% if review.draft_amount %}{{ review.draft_amount|currency }}{% else %}--{% endif %}
+        </a>
+        <div class="review-card-actions">
+          <div class="amount {% if review.draft_amount and review.draft_amount|float < 0 %}negative{% else %}positive{% endif %}">
+            {% if review.draft_amount %}{{ review.draft_amount|currency }}{% else %}--{% endif %}
+          </div>
+          <div class="review-action-buttons">
+            {% if review.draft_account_name and review.draft_payee_name and review.draft_category_value and review.draft_amount and review.draft_spent_on %}
+              <form method="post" action="/reviews/{{ review.id }}/quick-approve" class="inline-action-form" data-preserve-scroll>
+                <input type="hidden" name="return_to" value="{{ current_url }}">
+                <button class="icon-button" type="submit" aria-label="Quick approve review">✓</button>
+              </form>
+            {% endif %}
+            <form method="post" action="/reviews/{{ review.id }}/delete" class="inline-action-form" data-preserve-scroll>
+              <input type="hidden" name="return_to" value="{{ current_url }}">
+              <button class="icon-button danger" type="submit" aria-label="Delete review draft" data-confirm-message="Delete this review draft?">🗑</button>
+            </form>
+          </div>
         </div>
       </div>
-    </a>
+    </article>
   {% else %}
     <div class="empty-card">No SMS drafts are waiting for review.</div>
   {% endfor %}

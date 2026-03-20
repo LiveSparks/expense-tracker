@@ -3,10 +3,11 @@
 {% block content %}
 <section class="page-head compact-head compact-head-row">
   <h1>{% if mode == 'edit' %}Edit{% else %}Add{% endif %} transaction</h1>
-  <a class="button compact-button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Back</a>
+  <a class="button compact-button" href="{{ return_to }}">Back</a>
 </section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 <form class="stack-form card-form compact-form" method="post" enctype="multipart/form-data" action="{% if mode == 'edit' %}/transactions/{{ transaction.id }}/edit{% else %}/transactions{% endif %}">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
     <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required>
@@ -43,11 +44,48 @@
   {% if transaction and transaction.attachments %}
     <div class="attachment-pills">{% for attachment in transaction.attachments %}<a class="attachment-pill" href="/attachments/{{ transaction.id }}/{{ attachment.original_name | urlencode }}">{{ attachment.original_name }}</a>{% endfor %}</div>
   {% endif %}
+  {% if mode == 'edit' and related_sms_messages %}
+    <section class="sms-history-panel">
+      <div class="label-row">
+        <label>Linked SMS</label>
+        <span class="manage-tag">{{ related_sms_messages | length }}</span>
+      </div>
+      <div class="list-stack dense-list">
+        {% for message in related_sms_messages %}
+          <article class="review-panel sms-history-card">
+            <div class="hero-row">
+              <strong>{{ message.sender }}</strong>
+              <span class="manage-tag">{{ message.received_at | display_datetime }}</span>
+            </div>
+            <div class="transaction-meta">
+              Matched to {{ message.matched_account_name }} → {{ message.matched_payee_name }}
+              {% if message.is_related_transfer_side %}<span class="inline-chip">Paired transfer side</span>{% endif %}
+            </div>
+            <div class="transaction-notes sms-preview">{{ message.content }}</div>
+            {% if message.markers.reference_hint or message.markers.account_hint or message.markers.merchant_hint %}
+              <div class="attachment-pills">
+                {% if message.markers.reference_hint %}<span class="attachment-pill">Ref {{ message.markers.reference_hint }}</span>{% endif %}
+                {% if message.markers.account_hint %}<span class="attachment-pill">A/C {{ message.markers.account_hint }}</span>{% endif %}
+                {% if message.markers.merchant_hint %}<span class="attachment-pill">{{ message.markers.merchant_hint }}</span>{% endif %}
+              </div>
+            {% endif %}
+            {% if message.match_reasons %}
+              <ul class="review-list">
+                {% for reason in message.match_reasons %}
+                  <li>{{ reason }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
   <label>Notes</label>
   <textarea name="notes" rows="3">{{ transaction.notes if transaction else '' }}</textarea>
   <div class="split-row compact-gap compact-split actions-row">
     <button class="button primary compact-button" type="submit">Save</button>
-    <a class="button compact-button" href="/transactions{% if selected_account %}?account={{ selected_account | urlencode }}{% endif %}">Cancel</a>
+    <a class="button compact-button" href="{{ return_to }}">Cancel</a>
   </div>
 </form>
 <dialog class="category-dialog" data-category-dialog>
@@ -69,6 +107,7 @@
 </dialog>
 {% if mode == 'edit' %}
 <form method="post" action="/transactions/{{ transaction.id }}/delete" class="inline-delete-form">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
   <button class="button danger compact-button full-width" type="submit" data-confirm-message="Delete this transaction?">Delete transaction</button>
 </form>
 {% endif %}

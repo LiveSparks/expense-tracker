@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}LLM request · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head compact-head-row">
+  <h1>LLM request</h1>
+  <a class="button compact-button" href="{{ return_to }}">Back</a>
+</section>
+
+<section class="transaction-card compact-transaction review-source-card">
+  <div class="transaction-main-text">
+    <strong class="transaction-primary">{{ review.sender }}</strong>
+    <div class="transaction-meta">{{ review.received_at|display_datetime }}</div>
+    <div class="transaction-notes sms-preview">{{ review.content }}</div>
+  </div>
+</section>
+
+<section class="review-panel">
+  <strong>Model</strong>
+  <pre class="code-block">{{ prompt_preview.model }}</pre>
+</section>
+
+<section class="review-panel">
+  <strong>System prompt</strong>
+  <pre class="code-block">{{ prompt_preview.system_prompt }}</pre>
+</section>
+
+<section class="review-panel">
+  <strong>User payload</strong>
+  <pre class="code-block">{{ prompt_preview.user_prompt }}</pre>
+</section>
+
+<section class="review-panel">
+  <strong>Typed structured output model</strong>
+  <pre class="code-block">{{ prompt_preview.text_format_model }}</pre>
+</section>
+
+<section class="review-panel">
+  <strong>Equivalent JSON schema</strong>
+  <pre class="code-block">{{ prompt_preview.response_format | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

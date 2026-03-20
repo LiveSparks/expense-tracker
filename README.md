@@ -1,13 +1,14 @@
 # Expense Tracker
 
-Mobile-first personal expense tracker with:
+Mobile-first personal finance tracker with:
 
 - SQLite-backed ledger storage
 - FastAPI web UI and JSON API
 - transfer-aware transactions
 - receipt/file attachments
 - SMS intake and review queue
-- OpenAI-backed draft generation with heuristic fallback
+- OpenAI-backed draft generation with typed structured output
+- prompt preview tooling for inspecting the exact LLM request
 
 ## Requirements
 
@@ -24,8 +25,6 @@ pip install -e .
 
 ## Run the app
 
-Start the web server:
-
 ```bash
 . .venv/bin/activate
 expense-tracker serve --host 0.0.0.0 --port 8000
@@ -35,9 +34,29 @@ The default database lives at `data/ledger.db`.
 
 If an older `data/ledger.json` exists, it is migrated automatically on first load and backed up to `data/ledger.json.bak`.
 
-## Seed demo data
+## Documentation
 
-Import the generated mock ledger data:
+- `docs/ARCHITECTURE.md` explains the module layout, database shape, request flow, SMS pipeline, and OpenAI integration.
+- `docs/WORKFLOWS.md` documents the common operator and development workflows, including backup/restore, SMS review, and live-server restart steps.
+
+## Database backup and restore
+
+Create a timestamped local backup:
+
+```bash
+mkdir -p backups
+cp data/ledger.db "backups/ledger-$(date -u +%Y%m%dT%H%M%SZ).db"
+```
+
+Restore a backup while the server is stopped:
+
+```bash
+cp backups/ledger-YYYYMMDDTHHMMSSZ.db data/ledger.db
+```
+
+The `backups/` directory is gitignored and intended for local safety copies only.
+
+## Seed demo data
 
 ```bash
 . .venv/bin/activate
@@ -48,14 +67,21 @@ This imports `data/sms_pipeline/mock_ledger_seed.json` into the active SQLite da
 
 ## Import a real ledger CSV
 
-Replace the current app data with transactions from the legacy export:
-
 ```bash
 . .venv/bin/activate
 expense-tracker import-ledger-csv --csv-file /root/All-Accounts_2.csv
 ```
 
 This clears the current ledger, attachments, and queued SMS review items before importing the CSV directly into SQLite.
+
+## Import historical SMS into SQLite
+
+```bash
+. .venv/bin/activate
+expense-tracker import-sms-history --sms-csv /root/All_Conversations_2026-03-20.csv
+```
+
+This stores raw SMS rows, extracted markers, match reasons, and matched transaction links for future retrieval.
 
 ## Run tests
 
@@ -93,7 +119,7 @@ List transactions with search:
 expense-tracker list --search "amazon"
 ```
 
-## Web/API overview
+## Web and API overview
 
 Main pages:
 
@@ -101,15 +127,15 @@ Main pages:
 - `/transactions` ledger list
 - `/transactions/new` add transaction
 - `/reviews` SMS review queue
+- `/reviews/{review_id}/llm-request` inspect the exact LLM request for a review
 - `/manage` metadata management
 
 Key API endpoints:
 
 - `GET /api/transactions`
 - `POST /api/transactions`
-- `PUT /api/transactions/{transaction_id}`
-- `DELETE /api/transactions/{transaction_id}`
 - `GET /api/reviews`
+- `GET /api/reviews/{review_id}/llm-request`
 - `POST /api/sms/intake`
 
 Example SMS intake request:
@@ -127,12 +153,36 @@ curl -X POST http://127.0.0.1:8000/api/sms/intake \
 
 ## OpenAI draft generation
 
-The SMS intake workflow checks `/root/openai.key` for an API key and uses `gpt-5-mini` with structured output for draft generation.
+The review workflow checks `/root/openai.key` for an API key and uses `gpt-5-mini`.
+
+The current app path uses the OpenAI Python SDK typed parse flow:
+
+- system prompt loaded from `expense_tracker/prompts/review_draft_prompt.txt`
+- user payload containing the SMS, extracted markers, similar history, allowed metadata, and transfer rules
+- typed structured output parsed through `responses.parse(..., text_format=ReviewDraftTextFormat)`
 
 If the OpenAI call fails, the app records an explicit heuristic fallback draft instead of silently dropping the request.
+
+## Live operations
+
+Restart the server:
+
+```bash
+ss -ltnp | grep ':8000'
+kill <PID>
+. .venv/bin/activate
+nohup expense-tracker serve --host 0.0.0.0 --port 8000 >/tmp/expense-tracker.log 2>&1 &
+```
+
+Inspect the current live review queue:
+
+```bash
+curl http://127.0.0.1:8000/api/reviews
+```
 
 ## Repository notes
 
 - Runtime data stays under `data/` and is gitignored.
+- Local database backups live under `backups/` and are gitignored.
 - The project is web-first; the older TUI has been removed.
 - Review drafts are stored in SQLite alongside the main ledger data.

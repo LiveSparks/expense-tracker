@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import shutil
 import threading
 import tempfile
@@ -10,11 +11,13 @@ from typing import Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .cli import default_data_file
+from .config import AppConfig, load_app_config
 from .formatting import format_display_date, format_display_datetime, format_inr, format_list_date
 from .review_workflow import ReviewWorkflowStore
 from .sms_history import SmsHistoryStore
@@ -170,6 +173,7 @@ def transaction_form_context(
     selected_account: str,
     selected_payee: str,
     selected_category: str,
+    selected_amount: str,
     error: str | None,
     return_to: str | None = None,
     related_sms_messages: list[dict[str, object]] | None = None,
@@ -195,6 +199,7 @@ def transaction_form_context(
         "selected_account": selected_account,
         "selected_payee": selected_payee,
         "selected_category": selected_category,
+        "selected_amount": selected_amount,
         "selected_spent_on": transaction.spent_on.isoformat() if transaction else date.today().isoformat(),
         "error": error,
         "return_to": return_to or (f"/transactions?{urlencode({'account': selected_account})}" if selected_account else "/transactions"),
@@ -240,9 +245,17 @@ def navigation_context(request: Request) -> dict[str, str]:
     return {"add_transaction_href": add_transaction_href}
 
 
-def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = False) -> FastAPI:
+def create_app(
+    data_file: Path | None = None,
+    *,
+    process_reviews_inline: bool = False,
+    config: AppConfig | None = None,
+) -> FastAPI:
     app = FastAPI(title="Expense Tracker")
     app.state.data_file = data_file or default_data_file()
+    app.state.config = config or load_app_config()
+    if app.state.config.allowed_hosts != ("*",):
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(app.state.config.allowed_hosts))
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
     review_worker_lock = threading.Lock()
     review_worker: dict[str, threading.Thread | None] = {"thread": None}
@@ -251,7 +264,49 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
         return ExpenseTracker(app.state.data_file)
 
     def review_store() -> ReviewWorkflowStore:
-        return ReviewWorkflowStore(app.state.data_file)
+        return ReviewWorkflowStore(app.state.data_file, config=app.state.config)
+
+    def auth_token() -> str | None:
+        return app.state.config.resolved_auth_token
+
+    def request_token(request: Request) -> str | None:
+        header = request.headers.get("authorization", "").strip()
+        if header.lower().startswith("bearer "):
+            return header[7:].strip() or None
+        cookie_name = app.state.config.cookie_name
+        cookie_value = request.cookies.get(cookie_name, "").strip()
+        return cookie_value or None
+
+    def is_authorized(request: Request) -> bool:
+        expected = auth_token()
+        if not expected:
+            return True
+        provided = request_token(request)
+        return bool(provided) and secrets.compare_digest(provided, expected)
+
+    def is_exempt_path(path: str) -> bool:
+        return path.startswith("/static/") or path in {"/auth/login", "/auth/logout", "/healthz"}
+
+    @app.middleware("http")
+    async def require_authentication(request: Request, call_next):
+        if not app.state.config.auth_enabled or is_exempt_path(request.url.path) or is_authorized(request):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "Unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        login_target = f"/auth/login?{urlencode({'next': request_relative_url(request)})}"
+        return RedirectResponse(login_target, status_code=303)
+
+    @app.middleware("http")
+    async def set_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
 
     def start_review_worker() -> None:
         if process_reviews_inline:
@@ -296,6 +351,59 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
             "current_url": current_url,
             "has_active_filters": any(value for key, value in filters.items() if key not in {"account", "search"}) or request.query_params.get("show_filters") == "1",
         }
+
+    @app.get("/healthz")
+    def healthz():
+        return {"status": "ok"}
+
+    @app.get("/auth/login")
+    def auth_login_form(request: Request, next: str | None = None, error: str | None = None):
+        if not app.state.config.auth_enabled:
+            return RedirectResponse("/", status_code=303)
+        normalized_next = normalize_return_to(next, "/")
+        if is_authorized(request):
+            return RedirectResponse(normalized_next, status_code=303)
+        return TEMPLATES.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "next": normalized_next,
+                "error": error,
+            },
+            status_code=401 if error else 200,
+        )
+
+    @app.post("/auth/login")
+    def auth_login(request: Request, token: str = Form(""), next: str = Form("/")):
+        if not app.state.config.auth_enabled:
+            return RedirectResponse("/", status_code=303)
+        expected = auth_token() or ""
+        normalized_next = normalize_return_to(next, "/")
+        if not token or not secrets.compare_digest(token, expected):
+            return TEMPLATES.TemplateResponse(
+                request,
+                "login.html",
+                {
+                    "next": normalized_next,
+                    "error": "Invalid token.",
+                },
+                status_code=401,
+            )
+        response = RedirectResponse(normalized_next, status_code=303)
+        response.set_cookie(
+            app.state.config.cookie_name,
+            token,
+            httponly=True,
+            samesite="lax",
+            secure=app.state.config.secure_cookies,
+        )
+        return response
+
+    @app.post("/auth/logout")
+    def auth_logout():
+        response = RedirectResponse("/auth/login", status_code=303)
+        response.delete_cookie(app.state.config.cookie_name)
+        return response
 
     @app.get("/")
     def dashboard(request: Request):
@@ -475,6 +583,7 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
                 selected_account=account or "",
                 selected_payee="",
                 selected_category="",
+                selected_amount="-",
                 error=None,
                 return_to=normalize_return_to(return_to, f"/transactions?{urlencode({'account': account})}" if account else "/transactions"),
             )
@@ -522,6 +631,7 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
                     selected_account=account_name,
                     selected_payee=payee_name,
                     selected_category=category_value,
+                    selected_amount=amount,
                     error=str(exc),
                     return_to=normalized_return_to,
                 )
@@ -554,6 +664,7 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
                 selected_account=transaction.account_name,
                 selected_payee=transaction.payee_name,
                 selected_category=selected_category,
+                selected_amount=f"{transaction.amount:.2f}",
                 error=None,
                 return_to=normalized_return_to,
                 related_sms_messages=related_sms_messages,
@@ -602,6 +713,7 @@ def create_app(data_file: Path | None = None, *, process_reviews_inline: bool = 
                     selected_account=account_name,
                     selected_payee=payee_name,
                     selected_category=category_value,
+                    selected_amount=amount,
                     error=str(exc),
                     return_to=normalized_return_to,
                 )

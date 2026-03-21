@@ -23,6 +23,31 @@ python3 -m venv .venv
 pip install -e .
 ```
 
+Generate a bearer token for protected clients:
+
+```bash
+. .venv/bin/activate
+expense-tracker generate-auth-token --write-file /tmp/expense-tracker.auth
+```
+
+## Simple LXC production install
+
+For a single LXC guest with an external reverse proxy, use:
+
+```bash
+sudo ./scripts/install_lxc.sh
+```
+
+The script:
+
+- creates `.venv` and installs the app
+- prepares `/var/lib/expense-tracker`
+- prepares `/etc/expense-tracker`
+- generates an auth token file if one does not exist
+- installs a `systemd` unit for the app
+
+After the script runs, update `/etc/expense-tracker/expense-tracker.env` with the real hostnames for `EXPENSE_TRACKER_ALLOWED_HOSTS`.
+
 ## Run the app
 
 ```bash
@@ -34,10 +59,34 @@ The default database lives at `data/ledger.db`.
 
 If an older `data/ledger.json` exists, it is migrated automatically on first load and backed up to `data/ledger.json.bak`.
 
+## Production configuration
+
+The app now uses environment-first configuration for production secrets and runtime settings.
+
+Supported variables:
+
+- `EXPENSE_TRACKER_AUTH_TOKEN`
+- `EXPENSE_TRACKER_AUTH_TOKEN_FILE`
+- `EXPENSE_TRACKER_OPENAI_API_KEY`
+- `EXPENSE_TRACKER_OPENAI_API_KEY_FILE`
+- `EXPENSE_TRACKER_SECURE_COOKIES`
+- `EXPENSE_TRACKER_ALLOWED_HOSTS`
+- `EXPENSE_TRACKER_COOKIE_NAME`
+
+For production, prefer the `*_FILE` variants with root-owned `0600` files under `/etc/expense-tracker/`.
+
+## Authentication
+
+If an auth token is configured, both the web UI and the JSON API are protected.
+
+- browser users log in through `/auth/login`; the app sets an `HttpOnly` session cookie that lasts for the browser session
+- API clients and Tasker can send `Authorization: Bearer <token>`
+- `/healthz` stays unauthenticated for local health checks and proxy probing
+
 ## Documentation
 
-- `docs/ARCHITECTURE.md` explains the module layout, database shape, request flow, SMS pipeline, and OpenAI integration.
-- `docs/WORKFLOWS.md` documents the common operator and development workflows, including backup/restore, SMS review, and live-server restart steps.
+- `docs/ARCHITECTURE.md` explains the module layout, database shape, request flow, auth/config model, SMS pipeline, and OpenAI integration.
+- `docs/WORKFLOWS.md` documents the common operator and development workflows, including backup/restore, token rotation, LXC install, and service restart steps.
 
 ## Database backup and restore
 
@@ -142,6 +191,7 @@ Example SMS intake request:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/sms/intake \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
   -d '{
     "sender": "JM-HDFCBK-S",
@@ -153,7 +203,11 @@ curl -X POST http://127.0.0.1:8000/api/sms/intake \
 
 ## OpenAI draft generation
 
-The review workflow checks `/root/openai.key` for an API key and uses `gpt-5-mini`.
+The review workflow uses `gpt-5-mini`.
+
+For production, configure the API key with `EXPENSE_TRACKER_OPENAI_API_KEY` or `EXPENSE_TRACKER_OPENAI_API_KEY_FILE`.
+
+The legacy `/root/openai.key` fallback still works for local compatibility, but it is no longer the recommended production path.
 
 The current app path uses the OpenAI Python SDK typed parse flow:
 
@@ -172,6 +226,12 @@ ss -ltnp | grep ':8000'
 kill <PID>
 . .venv/bin/activate
 nohup expense-tracker serve --host 0.0.0.0 --port 8000 >/tmp/expense-tracker.log 2>&1 &
+```
+
+Check health:
+
+```bash
+curl http://127.0.0.1:8000/healthz
 ```
 
 Inspect the current live review queue:

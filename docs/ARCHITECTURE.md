@@ -4,6 +4,7 @@
 
 The application is a web-first personal finance tracker built as a layered Python app:
 
+- `expense_tracker/config.py` centralizes runtime configuration and secret loading
 - `expense_tracker/tracker.py` owns ledger business rules
 - `expense_tracker/storage.py` persists the ledger into SQLite
 - `expense_tracker/web.py` exposes server-rendered pages and JSON APIs through FastAPI
@@ -43,11 +44,30 @@ Key persisted concerns include:
 `expense_tracker/web.py` mounts:
 
 - dashboard and ledger pages
+- token-backed login/logout pages
 - review queue and review detail pages
 - metadata management pages
 - JSON APIs for transactions, reviews, and SMS intake
 
 The UI is server-rendered with Jinja templates and small JavaScript enhancements in `expense_tracker/static/app.js`.
+
+### Configuration and auth layer
+
+`expense_tracker/config.py` resolves production settings from environment variables and optional secret-file paths.
+
+Current production-facing config covers:
+
+- auth token loading for web/API protection
+- OpenAI API key loading
+- secure-cookie behavior
+- allowed host validation
+
+If `EXPENSE_TRACKER_AUTH_TOKEN` or `EXPENSE_TRACKER_AUTH_TOKEN_FILE` is configured:
+
+- browser users authenticate through `/auth/login`
+- the UI uses an `HttpOnly` session cookie that stores the bearer token for the current browser session
+- API clients can use `Authorization: Bearer ...`
+- `/healthz` remains unauthenticated for health checks
 
 ### SMS review layer
 
@@ -80,6 +100,17 @@ Current request shape:
 Equivalent JSON schema can still be generated through `build_structured_output_schema()` for docs, analysis artifacts, and prompt inspection.
 
 ## Important data flows
+
+### Authentication
+
+1. A request hits `expense_tracker/web.py`.
+2. Auth middleware skips static assets, `/auth/login`, `/auth/logout`, and `/healthz`.
+3. For protected routes, the app checks either:
+   - `Authorization: Bearer <token>`
+   - the auth cookie set by the login form
+4. If the token is missing or invalid:
+   - browser requests redirect to `/auth/login`
+   - API requests receive `401 Unauthorized`
 
 ### Transaction creation
 
@@ -116,5 +147,6 @@ The client-side JavaScript is intentionally light. It currently handles:
 ## Operational notes
 
 - The live server is normally started through `expense-tracker serve`.
+- For LXC production, the recommended shape is a local `systemd` service bound to loopback, with TLS and reverse proxying handled externally.
 - Prompt preview for a review is available at `/reviews/{review_id}/llm-request` and `/api/reviews/{review_id}/llm-request`.
 - Database backups are local filesystem copies and are intentionally kept outside source control.

@@ -10,13 +10,13 @@
   <input type="hidden" name="return_to" value="{{ return_to }}">
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
-    <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required>
+    <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required data-select-on-focus>
     <button class="picker-toggle" type="button" aria-label="Show account options">▾</button>
     <div class="picker-menu"></div>
   </div>
   <label>Payee</label>
   <div class="picker js-picker" data-options='{{ payee_picker_options | tojson }}' data-allow-custom="true">
-    <input class="picker-input" name="payee_name" value="{{ selected_payee or (transaction.payee_name if transaction else '') }}" autocomplete="off" required>
+    <input class="picker-input" name="payee_name" value="{{ selected_payee or (transaction.payee_name if transaction else '') }}" autocomplete="off" required data-select-on-focus>
     <button class="picker-toggle" type="button" aria-label="Show payee options">▾</button>
     <div class="picker-menu"></div>
   </div>
@@ -25,14 +25,14 @@
     <button class="button compact-button small-button" type="button" data-open-category-dialog>New subcategory</button>
   </div>
   <div class="picker js-picker category-picker" data-options='{{ category_picker_options | tojson }}' data-allow-custom="false">
-    <input class="picker-input" name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" autocomplete="off" placeholder="Choose a subcategory" required>
+    <input class="picker-input" name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" autocomplete="off" placeholder="Choose a subcategory" required data-select-on-focus>
     <button class="picker-toggle" type="button" aria-label="Show category options">▾</button>
     <div class="picker-menu"></div>
   </div>
   <div class="split-row compact-gap compact-split">
     <div>
       <label>Amount</label>
-      <input name="amount" value="{{ '%.2f'|format(transaction.amount) if transaction else '' }}" inputmode="decimal" required>
+      <input name="amount" value="{{ selected_amount }}" inputmode="decimal" required {% if mode == 'create' %}autofocus{% endif %}>
     </div>
     <div>
       <label>Date</label>
@@ -93,12 +93,12 @@
     <div class="hero-row"><strong>New category</strong><button class="button compact-button small-button" type="submit">Close</button></div>
     <label>Category group</label>
     <div class="picker js-picker" data-options='{{ category_group_options | tojson }}' data-allow-custom="true">
-      <input class="picker-input" data-category-group-input autocomplete="off" placeholder="e.g. Travel">
+      <input class="picker-input" data-category-group-input autocomplete="off" placeholder="e.g. Travel" data-select-on-focus>
       <button class="picker-toggle" type="button" aria-label="Show category groups">▾</button>
       <div class="picker-menu"></div>
     </div>
     <label>Subcategory</label>
-    <input data-category-subcategory-input placeholder="e.g. Flights" autocomplete="off">
+    <input data-category-subcategory-input placeholder="e.g. Flights" autocomplete="off" data-select-on-focus>
     <div class="split-row compact-gap compact-split actions-row">
       <button class="button primary compact-button" type="button" data-apply-category-dialog>Use this category</button>
       <button class="button compact-button" type="submit">Cancel</button>

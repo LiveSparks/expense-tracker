@@ -222,6 +222,17 @@ class ExpenseTrackerCliTests(unittest.TestCase):
 
         self.assertIn("1 total, 1 useful, 1 matched", output)
 
+    def test_generate_auth_token_can_write_file(self) -> None:
+        token_file = Path(self.temp_dir.name) / "auth.token"
+
+        output = self.run_cli("generate-auth-token", "--length", "16", "--write-file", str(token_file))
+
+        lines = output.splitlines()
+        self.assertIn(f"Wrote auth token to {token_file}.", lines[0])
+        self.assertTrue(token_file.exists())
+        self.assertEqual(token_file.read_text(encoding="utf-8").strip(), lines[1])
+        self.assertGreaterEqual(len(lines[1]), 16)
+
 
 if __name__ == "__main__":
     unittest.main()

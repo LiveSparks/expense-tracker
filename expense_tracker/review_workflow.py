@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - exercised only when dependency is miss
     APIConnectionError = APIStatusError = APITimeoutError = None
     OpenAI = None
 
+from .config import AppConfig, load_app_config
 from .models import MetadataSnapshot, TransactionRecord
 from .sms_history import SmsHistoryStore
 from .sms_pipeline import (
@@ -27,10 +28,11 @@ from .sms_pipeline import (
     build_structured_output_schema,
     extract_sms_markers,
     regex_filter_reasons,
-    tokenize,
 )
 from .sqlite_utils import sqlite_connection
 from .tracker import ExpenseTracker
+
+HistoryBuckets = dict[str, list[dict[str, object]]]
 
 
 NOTE_PATTERN = re.compile(r"\b(?:note|remarks?)\s*[:=-]?\s*([A-Za-z0-9&./,'() -]{3,})", re.IGNORECASE)
@@ -45,15 +47,28 @@ class OpenAIDraftClient:
         self,
         *,
         key_path: Path = Path("/root/openai.key"),
+        api_key: str | None = None,
         model: str = "gpt-5-mini",
         prompt_path: Path | None = None,
+        config: AppConfig | None = None,
     ) -> None:
         self.key_path = key_path
+        self.api_key = api_key
         self.model = model
         self.prompt_path = prompt_path or Path(__file__).resolve().parent / "prompts" / "review_draft_prompt.txt"
+        self.config = config or load_app_config()
+
+    def _resolve_api_key(self) -> str | None:
+        if self.api_key and self.api_key.strip():
+            return self.api_key.strip()
+        if self.key_path.exists():
+            value = self.key_path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        return self.config.resolved_openai_api_key
 
     def is_configured(self) -> bool:
-        return self.key_path.exists() and bool(self.key_path.read_text(encoding="utf-8").strip())
+        return bool(self._resolve_api_key())
 
     def build_request_preview(
         self,
@@ -61,7 +76,7 @@ class OpenAIDraftClient:
         metadata: MetadataSnapshot,
         message: SmsMessage,
         markers: dict[str, object],
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
     ) -> dict[str, Any]:
         system_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
         user_payload = {
@@ -97,19 +112,22 @@ class OpenAIDraftClient:
         metadata: MetadataSnapshot,
         message: SmsMessage,
         markers: dict[str, object],
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
     ) -> dict[str, object]:
         if not self.is_configured():
-            raise OpenAIDraftError("OpenAI key file is not configured.")
+            raise OpenAIDraftError("OpenAI API key is not configured.")
         if OpenAI is None:
             raise OpenAIDraftError("The OpenAI Python SDK is not installed.")
+        api_key = self._resolve_api_key()
+        if not api_key:
+            raise OpenAIDraftError("OpenAI API key is not configured.")
         request_preview = self.build_request_preview(
             metadata=metadata,
             message=message,
             markers=markers,
             history=history,
         )
-        client = OpenAI(api_key=self.key_path.read_text(encoding="utf-8").strip(), timeout=45.0)
+        client = OpenAI(api_key=api_key, timeout=45.0)
         if not hasattr(client.responses, "parse"):
             raise OpenAIDraftError("The installed OpenAI SDK does not support responses.parse().")
         try:
@@ -153,7 +171,7 @@ class ReviewDraft:
     draft_notes: str
     review_status: str
     reasoning: list[str]
-    similar_examples: list[dict[str, object]]
+    similar_examples: HistoryBuckets
     created_at: datetime
     approved_transaction_id: str | None
 
@@ -183,9 +201,16 @@ class ReviewDraft:
 
 
 class ReviewWorkflowStore:
-    def __init__(self, data_file: Path, *, openai_client: OpenAIDraftClient | None = None) -> None:
+    def __init__(
+        self,
+        data_file: Path,
+        *,
+        openai_client: OpenAIDraftClient | None = None,
+        config: AppConfig | None = None,
+    ) -> None:
         self.data_file = data_file
-        self.openai_client = openai_client or OpenAIDraftClient()
+        self.config = config or load_app_config()
+        self.openai_client = openai_client or OpenAIDraftClient(config=self.config)
 
     def list_reviews(self, *, status: str | None = "for_review") -> list[ReviewDraft]:
         self._ensure_schema()
@@ -623,81 +648,112 @@ class ReviewWorkflowStore:
         transactions: list[TransactionRecord],
         *,
         limit: int = 3,
-    ) -> list[dict[str, object]]:
-        historical_examples = SmsHistoryStore(self.data_file).similar_examples(
+    ) -> HistoryBuckets:
+        sms_history_store = SmsHistoryStore(self.data_file)
+        historical_examples = sms_history_store.similar_examples(
             message=message,
             markers_payload=markers,
             transactions=transactions,
             limit=limit,
         )
-        if historical_examples:
-            return historical_examples
+        latest_transactions = [self._history_payload_from_transaction(transaction, ["Latest transaction history."]) for transaction in transactions[:limit]]
         amount = Decimal(str(markers["amount"])) if markers.get("amount") else None
-        event_kind = str(markers.get("event_kind") or "unknown")
-        sender_hint = str(markers.get("sender_hint") or "")
         merchant_hint = str(markers.get("merchant_hint") or "")
-        account_hint = str(markers.get("account_hint") or "")
-        ranked: list[tuple[float, dict[str, object]]] = []
-        for transaction in transactions:
-            score = 0.0
-            reasons: list[str] = []
-            if amount is not None:
-                txn_amount = abs(transaction.amount)
-                if txn_amount == abs(amount):
-                    score += 4.0
-                    reasons.append("Exact amount match.")
-                elif abs(txn_amount - abs(amount)) <= Decimal("10.00"):
-                    score += 1.0
-                    reasons.append("Near amount match.")
-            day_gap = abs((transaction.spent_on - message.received_at.date()).days)
-            if day_gap == 0:
-                score += 3.0
-                reasons.append("Same-day history.")
-            elif day_gap <= 3:
-                score += 1.0
-                reasons.append("Near-date history.")
-            if account_hint and account_hint in transaction.account_name:
-                score += 2.0
-                reasons.append("Account hint matched.")
-            if tokenize(sender_hint) & tokenize(transaction.account_name):
-                score += 1.0
-                reasons.append("Sender/account overlap.")
-            if merchant_hint and (tokenize(merchant_hint) & tokenize(transaction.payee_name)):
-                score += 2.5
-                reasons.append("Merchant/payee overlap.")
-            if event_kind == "credit" and transaction.amount > 0:
-                score += 1.0
-                reasons.append("Credit direction aligns.")
-            if event_kind in {"debit", "transfer"} and transaction.amount < 0:
-                score += 1.0
-                reasons.append("Debit direction aligns.")
-            if score <= 0:
-                continue
-            ranked.append(
-                (
-                    score,
-                    {
-                        "transaction_id": transaction.id,
-                        "account_name": transaction.account_name,
-                        "payee_name": transaction.payee_name,
-                        "category_value": self._transaction_category_value(transaction),
-                        "amount": f"{transaction.amount:.2f}",
-                        "spent_on": transaction.spent_on.isoformat(),
-                        "notes": transaction.notes,
-                        "score": round(score, 2),
-                        "reasons": reasons,
-                    },
-                )
+        same_payee_transactions = (
+            sms_history_store.merchant_examples(
+                merchant_hint=merchant_hint,
+                transactions=transactions,
+                limit=limit,
             )
-        ranked.sort(key=lambda item: (item[0], item[1]["spent_on"]), reverse=True)
-        return [item for _, item in ranked[:limit]]
+            if merchant_hint
+            else []
+        )
+
+        same_amount_transactions: list[dict[str, object]] = []
+        same_amount_keys: set[str] = set()
+        if amount is not None:
+            for transaction in transactions:
+                dedupe_key = transaction.transfer_group_id or transaction.id
+                if dedupe_key in same_amount_keys:
+                    continue
+                if abs(abs(transaction.amount) - abs(amount)) > Decimal("0.01"):
+                    continue
+                same_amount_transactions.append(
+                    self._history_payload_from_transaction(
+                        transaction,
+                        [f"Extracted amount matched transaction amount {transaction.amount:.2f}."],
+                    )
+                )
+                same_amount_keys.add(dedupe_key)
+                if len(same_amount_transactions) >= limit:
+                    break
+
+        same_sender_transactions = sms_history_store.sender_examples(
+            sender=message.contact,
+            transactions=transactions,
+            limit=limit,
+        )
+
+        return {
+            "latest_transactions": latest_transactions,
+            "same_payee_transactions": same_payee_transactions,
+            "same_amount_transactions": same_amount_transactions,
+            "same_sender_transactions": same_sender_transactions,
+        }
+
+    @staticmethod
+    def _history_payload_from_transaction(transaction: TransactionRecord, reasons: list[str]) -> dict[str, object]:
+        return {
+            "transaction_id": transaction.id,
+            "entry_type": transaction.entry_type,
+            "account_name": transaction.account_name,
+            "payee_name": transaction.payee_name,
+            "category_value": ReviewWorkflowStore._transaction_category_value(transaction),
+            "amount": f"{transaction.amount:.2f}",
+            "spent_on": transaction.spent_on.isoformat(),
+            "notes": transaction.notes,
+            "score": 0.0,
+            "reasons": reasons,
+            "linked_transaction_id": transaction.linked_transaction_id,
+            "transfer_group_id": transaction.transfer_group_id,
+            "historical_sender": "",
+            "historical_sms_received_at": "",
+            "historical_sms_excerpt": "",
+            "historical_markers": {},
+            "historical_sms_messages": [],
+        }
+
+    @staticmethod
+    def _flatten_history(history: HistoryBuckets) -> list[dict[str, object]]:
+        ordered_keys = (
+            "same_payee_transactions",
+            "same_amount_transactions",
+            "same_sender_transactions",
+            "latest_transactions",
+        )
+        seen: set[str] = set()
+        flattened: list[dict[str, object]] = []
+        for key in ordered_keys:
+            for item in history.get(key, []):
+                transaction_id = str(item.get("transaction_id") or "")
+                if transaction_id and transaction_id in seen:
+                    continue
+                if transaction_id:
+                    seen.add(transaction_id)
+                flattened.append(item)
+        return flattened
+
+    @staticmethod
+    def _first_history_item(history: HistoryBuckets) -> dict[str, object] | None:
+        flattened = ReviewWorkflowStore._flatten_history(history)
+        return flattened[0] if flattened else None
 
     def _build_draft(
         self,
         metadata: MetadataSnapshot,
         message: SmsMessage,
         markers: dict[str, object],
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
     ) -> dict[str, object]:
         reasoning: list[str] = []
         account_name = self._resolve_account_name(metadata, markers, history, reasoning)
@@ -707,7 +763,8 @@ class ReviewWorkflowStore:
         notes = self._build_notes(markers, message.content)
         if notes:
             reasoning.append("Notes were limited to high-value bullets only.")
-        if history and str(history[0].get("entry_type") or "") == "transfer_out":
+        first_history = self._first_history_item(history)
+        if first_history and str(first_history.get("entry_type") or "") == "transfer_out":
             reasoning.append("Transfer history was normalized to one source-side draft because the tracker creates the sister transaction automatically.")
         spent_on = message.received_at.date().isoformat()
         reasoning.append("Draft date defaults to the SMS timestamp date.")
@@ -761,7 +818,7 @@ class ReviewWorkflowStore:
         self,
         metadata: MetadataSnapshot,
         markers: dict[str, object],
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
         reasoning: list[str],
     ) -> str:
         account_hint = str(markers.get("account_hint") or "")
@@ -770,9 +827,10 @@ class ReviewWorkflowStore:
                 if account_hint in account_name:
                     reasoning.append(f"Selected account {account_name} from account suffix hint {account_hint}.")
                     return account_name
-        if history:
-            reasoning.append(f"Selected account {history[0]['account_name']} from the closest historical match.")
-            return str(history[0]["account_name"])
+        first_history = self._first_history_item(history)
+        if first_history:
+            reasoning.append(f"Selected account {first_history['account_name']} from similar history.")
+            return str(first_history["account_name"])
         if metadata.accounts:
             reasoning.append(f"Fell back to the first available account {metadata.accounts[0]}.")
             return metadata.accounts[0]
@@ -782,7 +840,7 @@ class ReviewWorkflowStore:
         self,
         metadata: MetadataSnapshot,
         markers: dict[str, object],
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
         reasoning: list[str],
     ) -> str:
         merchant_hint = str(markers.get("merchant_hint") or "").strip()
@@ -791,9 +849,10 @@ class ReviewWorkflowStore:
             if exact is not None:
                 reasoning.append(f"Matched payee {exact} directly from merchant text.")
                 return exact
-        if history:
-            reasoning.append(f"Selected payee {history[0]['payee_name']} from the closest historical match.")
-            return str(history[0]["payee_name"])
+        first_history = self._first_history_item(history)
+        if first_history:
+            reasoning.append(f"Selected payee {first_history['payee_name']} from similar history.")
+            return str(first_history["payee_name"])
         if merchant_hint:
             reasoning.append(f"Used merchant hint {merchant_hint} as the draft payee.")
             return merchant_hint
@@ -802,12 +861,13 @@ class ReviewWorkflowStore:
     def _resolve_category_value(
         self,
         metadata: MetadataSnapshot,
-        history: list[dict[str, object]],
+        history: HistoryBuckets,
         reasoning: list[str],
     ) -> str:
-        if history:
-            reasoning.append(f"Selected category {history[0]['category_value']} from the closest historical match.")
-            return str(history[0]["category_value"])
+        first_history = self._first_history_item(history)
+        if first_history:
+            reasoning.append(f"Selected category {first_history['category_value']} from similar history.")
+            return str(first_history["category_value"])
         for category_name in metadata.categories:
             subcategories = metadata.subcategories_by_category.get(category_name, [])
             if subcategories:
@@ -906,6 +966,14 @@ class ReviewWorkflowStore:
             )
 
     def _row_to_review(self, row: sqlite3.Row) -> ReviewDraft:
+        similar_examples = json.loads(row["similar_examples_json"])
+        if isinstance(similar_examples, list):
+            similar_examples = {
+                "latest_transactions": [],
+                "same_payee_transactions": similar_examples,
+                "same_amount_transactions": [],
+                "same_sender_transactions": [],
+            }
         return ReviewDraft(
             id=row["id"],
             sender=row["sender"],
@@ -924,7 +992,7 @@ class ReviewWorkflowStore:
             draft_notes=row["draft_notes"],
             review_status=row["review_status"],
             reasoning=json.loads(row["reasoning_json"]),
-            similar_examples=json.loads(row["similar_examples_json"]),
+            similar_examples=similar_examples,
             created_at=datetime.fromisoformat(row["created_at"]),
             approved_transaction_id=row["approved_transaction_id"],
         )

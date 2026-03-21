@@ -77,20 +77,33 @@
   {% if review.similar_examples %}
     <section class="review-panel">
       <strong>Similar history</strong>
-      <div class="list-stack dense-list">
-        {% for item in review.similar_examples %}
-          <div class="transaction-card compact-transaction">
-            <div class="transaction-main-row">
-              <a class="transaction-main-text review-card-link" href="/transactions/{{ item.transaction_id }}/edit?return_to={{ current_url | urlencode }}">
-                <strong class="transaction-primary">{{ item.payee_name }}</strong>
-                <div class="transaction-meta">{{ item.account_name }} · {{ item.category_value }} · {{ item.spent_on|display_date }}</div>
-                {% if item.notes %}<div class="transaction-notes">{{ item.notes }}</div>{% endif %}
-              </a>
-              <div class="amount {% if item.amount|float < 0 %}negative{% else %}positive{% endif %}">{{ item.amount|currency }}</div>
-            </div>
+      {% set history_sections = [
+        ('latest_transactions', 'Latest transactions'),
+        ('same_payee_transactions', 'Same extracted payee'),
+        ('same_amount_transactions', 'Same amount'),
+        ('same_sender_transactions', 'Same SMS sender')
+      ] %}
+      {% for bucket_key, bucket_label in history_sections %}
+        {% set items = review.similar_examples.get(bucket_key, []) %}
+        {% if items %}
+          <div class="label-row"><label>{{ bucket_label }}</label><span class="manage-tag">{{ items | length }}</span></div>
+          <div class="list-stack dense-list">
+            {% for item in items %}
+              <div class="transaction-card compact-transaction">
+                <div class="transaction-main-row">
+                  <a class="transaction-main-text review-card-link" href="/transactions/{{ item.transaction_id }}/edit?return_to={{ current_url | urlencode }}">
+                    <strong class="transaction-primary">{{ item.payee_name }}</strong>
+                    <div class="transaction-meta">{{ item.account_name }} · {{ item.category_value }} · {{ item.spent_on|display_date }}</div>
+                    {% if item.notes %}<div class="transaction-notes">{{ item.notes }}</div>{% endif %}
+                    {% if item.reasons %}<div class="transaction-notes">{{ item.reasons | join(' ') }}</div>{% endif %}
+                  </a>
+                  <div class="amount {% if item.amount|float < 0 %}negative{% else %}positive{% endif %}">{{ item.amount|currency }}</div>
+                </div>
+              </div>
+            {% endfor %}
           </div>
-        {% endfor %}
-      </div>
+        {% endif %}
+      {% endfor %}
     </section>
   {% endif %}
   <div class="split-row compact-gap compact-split actions-row">

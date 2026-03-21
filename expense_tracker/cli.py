@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
 
+from .config import generate_auth_token, load_app_config, write_secret_file
 from .formatting import format_inr
 from .review_workflow import ReviewWorkflowStore
 from .sms_history import SmsHistoryStore
@@ -65,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
 
+    token_parser = subparsers.add_parser("generate-auth-token", help="Generate an auth token for production clients.")
+    token_parser.add_argument("--length", type=int, default=32)
+    token_parser.add_argument("--write-file", type=Path)
+
     analyze_parser = subparsers.add_parser("analyze-sms", help="Run the legacy SMS analysis pipeline.")
     analyze_parser.add_argument("--transactions-csv", type=Path, default=Path("/root/All-Accounts_2.csv"))
     analyze_parser.add_argument("--sms-csv", type=Path, default=Path("/root/all_sms.csv"))
@@ -90,7 +95,7 @@ def launch_web(data_file: Path, host: str, port: int) -> None:
 
     from .web import create_app
 
-    uvicorn.run(create_app(data_file), host=host, port=port)
+    uvicorn.run(create_app(data_file, config=load_app_config()), host=host, port=port)
 
 
 def render_transactions(transactions: list[TransactionRecord], total: Decimal) -> str:
@@ -196,6 +201,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "serve":
             launch_web(args.data_file, args.host, args.port)
+            return 0
+
+        if args.command == "generate-auth-token":
+            token = generate_auth_token(args.length)
+            if args.write_file:
+                write_secret_file(args.write_file, token)
+                print(f"Wrote auth token to {args.write_file}.")
+            print(token)
             return 0
 
         if args.command == "analyze-sms":

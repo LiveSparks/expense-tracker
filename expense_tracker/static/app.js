@@ -89,6 +89,14 @@ function initPicker(root) {
       input.focus();
     }
   });
+  menu.addEventListener('pointerdown', (event) => {
+    const option = event.target.closest('[data-value]');
+    if (!option) {
+      return;
+    }
+    event.preventDefault();
+    selectValue(option.dataset.value || '');
+  });
   menu.addEventListener('click', (event) => {
     const option = event.target.closest('[data-value]');
     if (!option) {
@@ -160,6 +168,47 @@ function initCategoryDialog() {
     targetInput.value = `${group} / ${subcategory}`;
     targetInput.dispatchEvent(new Event('input', { bubbles: true }));
     dialog.close();
+  });
+}
+
+function initSelectableFormFields() {
+  const canSelectAll = (node) => {
+    if (!(node instanceof HTMLInputElement)) {
+      return false;
+    }
+    if (!node.value.trim()) {
+      return false;
+    }
+    return !['hidden', 'file', 'date', 'checkbox', 'radio'].includes(node.type);
+  };
+
+  document.querySelectorAll('[data-select-on-focus]').forEach((input) => {
+    const selectAll = () => {
+      if (!canSelectAll(input)) {
+        return;
+      }
+      input.dataset.autoSelectPending = 'true';
+      window.requestAnimationFrame(() => {
+        if (document.activeElement !== input || !canSelectAll(input)) {
+          input.dataset.autoSelectPending = '';
+          return;
+        }
+        input.select();
+      });
+    };
+
+    input.addEventListener('focus', selectAll);
+    input.addEventListener('pointerup', (event) => {
+      if (input.dataset.autoSelectPending !== 'true' || !canSelectAll(input)) {
+        return;
+      }
+      event.preventDefault();
+      input.select();
+      input.dataset.autoSelectPending = '';
+    });
+    input.addEventListener('blur', () => {
+      input.dataset.autoSelectPending = '';
+    });
   });
 }
 
@@ -439,6 +488,7 @@ function initManageDeleteDialogs() {
 document.addEventListener('DOMContentLoaded', () => {
   initScrollRestoration();
   document.querySelectorAll('.js-picker').forEach(initPicker);
+  initSelectableFormFields();
   initCategoryDialog();
   initSelectionMode();
   initInlineEditors();

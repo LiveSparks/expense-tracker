@@ -89,6 +89,70 @@ class SmsHistoryTests(unittest.TestCase):
         self.assertEqual(examples[0]["payee_name"], "Amazon")
         self.assertEqual(examples[0]["historical_sender"], "JM-HDFCBK-S")
 
+    def test_sender_examples_uses_same_sender_history(self) -> None:
+        self.tracker.add_transaction(
+            account_name="HDFC Savings 2054",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-499.00",
+            spent_on="2026-03-20",
+            notes="- Ref: 552880661565",
+        )
+        self.sms_csv.write_text(
+            "\n".join(
+                [
+                    "Exported on 2026-03-20 10:33 with SMS Exporter android app https://smartpositive.com/sms-exporter",
+                    "",
+                    "Date,Time,Direction,Contact,Phone,Content,Type",
+                    "2026-03-20,09:01:10,Received,JM-HDFCBK-S,JM-HDFCBK-S,Sent Rs.499.00 From HDFC Bank A/C *2054 To Amazon Seller Services On 20/03/26 Ref 552880661565,SMS",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        store = SmsHistoryStore(self.data_file)
+        store.import_csv(self.sms_csv, self.tracker.list_transactions())
+
+        examples = store.sender_examples(sender="JM-HDFCBK-S", transactions=self.tracker.list_transactions())
+
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(examples[0]["payee_name"], "Amazon")
+        self.assertEqual(examples[0]["reasons"], ["Historical SMS sender matched the new message sender."])
+
+    def test_merchant_examples_use_historical_extracted_merchants(self) -> None:
+        self.tracker.add_transaction(
+            account_name="HDFC Savings 2054",
+            payee_name="Online shopping",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-499.00",
+            spent_on="2026-03-20",
+            notes="- Ref: 552880661565",
+        )
+        self.sms_csv.write_text(
+            "\n".join(
+                [
+                    "Exported on 2026-03-20 10:33 with SMS Exporter android app https://smartpositive.com/sms-exporter",
+                    "",
+                    "Date,Time,Direction,Contact,Phone,Content,Type",
+                    "2026-03-20,09:01:10,Received,JM-HDFCBK-S,JM-HDFCBK-S,Sent Rs.499.00 From HDFC Bank A/C *2054 To Amazon Seller Services On 20/03/26 Ref 552880661565,SMS",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        store = SmsHistoryStore(self.data_file)
+        store.import_csv(self.sms_csv, self.tracker.list_transactions())
+
+        examples = store.merchant_examples(
+            merchant_hint="Amazon Seller Services",
+            transactions=self.tracker.list_transactions(),
+        )
+
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(examples[0]["payee_name"], "Online shopping")
+        self.assertEqual(examples[0]["historical_markers"]["merchant_hint"], "Amazon Seller Services")
+        self.assertIn("Historical extracted merchant marker Amazon Seller Services matched", examples[0]["reasons"][0])
+
     def test_import_csv_requires_close_amount_match(self) -> None:
         self.tracker.add_transaction(
             account_name="HDFC Savings 2054",

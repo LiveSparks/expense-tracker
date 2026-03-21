@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Login · Expense Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="page-head compact-head compact-head-row">
+        <h1>Enter access token</h1>
+      </section>
+      {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+      <form class="stack-form card-form compact-form" method="post" action="/auth/login">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label>Token</label>
+        <input name="token" type="password" autocomplete="current-password" autofocus required>
+        <div class="split-row compact-gap compact-split actions-row">
+          <button class="button primary compact-button" type="submit">Login</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>

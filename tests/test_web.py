@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from expense_tracker.config import AppConfig
 from expense_tracker.review_workflow import OpenAIDraftClient
 from expense_tracker.sms_history import SmsHistoryStore
 from expense_tracker.sms_pipeline import ReviewDraftTextFormat, SmsMessage, extract_sms_markers
@@ -30,6 +31,74 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         self.assertIn("Cash", response.text)
         self.assertIn("₹1,000.00", response.text)
         self.assertNotIn("Tap an account to view its transactions.", response.text)
+
+    def test_web_ui_redirects_to_login_when_auth_enabled(self) -> None:
+        protected_client = TestClient(
+            create_app(
+                self.data_file,
+                process_reviews_inline=True,
+                config=AppConfig(auth_token="secret-token"),
+            )
+        )
+
+        response = protected_client.get("/", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/auth/login?next=%2F")
+
+    def test_login_sets_cookie_and_allows_web_ui(self) -> None:
+        protected_client = TestClient(
+            create_app(
+                self.data_file,
+                process_reviews_inline=True,
+                config=AppConfig(auth_token="secret-token"),
+            )
+        )
+
+        login = protected_client.post(
+            "/auth/login",
+            data={"token": "secret-token", "next": "/"},
+            follow_redirects=False,
+        )
+        dashboard = protected_client.get("/")
+
+        self.assertEqual(login.status_code, 303)
+        self.assertEqual(login.headers["location"], "/")
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn("Logout", dashboard.text)
+
+    def test_api_requires_bearer_token_when_auth_enabled(self) -> None:
+        protected_client = TestClient(
+            create_app(
+                self.data_file,
+                process_reviews_inline=True,
+                config=AppConfig(auth_token="secret-token"),
+            )
+        )
+
+        unauthorized = protected_client.get("/api/transactions")
+        authorized = protected_client.get(
+            "/api/transactions",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(unauthorized.json()["detail"], "Unauthorized")
+        self.assertEqual(authorized.status_code, 200)
+
+    def test_healthz_stays_open_when_auth_enabled(self) -> None:
+        protected_client = TestClient(
+            create_app(
+                self.data_file,
+                process_reviews_inline=True,
+                config=AppConfig(auth_token="secret-token"),
+            )
+        )
+
+        response = protected_client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
 
     def test_transactions_page_can_be_filtered_by_account(self) -> None:
         self.client.post("/api/transactions", data={"account_name": "Cash", "payee_name": "Shop 1", "category_value": "General / Grocery", "amount": "-20.00", "spent_on": "2026-03-01"})
@@ -142,6 +211,36 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Amazon", response.text)
         self.assertTrue((self.data_file.parent / "attachments").exists())
+
+    def test_new_transaction_form_autofocuses_amount_and_defaults_negative_sign(self) -> None:
+        response = self.client.get("/transactions/new")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="amount" value="-"', response.text)
+        self.assertIn('name="amount" value="-" inputmode="decimal" required autofocus', response.text)
+
+    def test_transaction_form_marks_non_notes_fields_selectable(self) -> None:
+        tracker = ExpenseTracker(self.data_file)
+        tracker.add_transaction(
+            account_name="Cash",
+            payee_name="Amazon",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-20.00",
+            spent_on="2026-03-01",
+            notes="Keep cursor placement here.",
+        )
+        created = tracker.list_transactions()[0]
+
+        response = self.client.get(f"/transactions/{created.id}/edit")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="account_name" value="Cash" autocomplete="off" required data-select-on-focus', response.text)
+        self.assertIn('name="payee_name" value="Amazon" autocomplete="off" required data-select-on-focus', response.text)
+        self.assertIn('name="category_value" value="General / Delivery" autocomplete="off" placeholder="Choose a subcategory" required data-select-on-focus', response.text)
+        self.assertIn('name="amount" value="-20.00" inputmode="decimal" required', response.text)
+        self.assertNotIn('name="amount" value="-20.00" inputmode="decimal" required data-select-on-focus', response.text)
+        self.assertIn('<textarea name="notes" rows="3">Keep cursor placement here.</textarea>', response.text)
 
     def test_edit_view_shows_linked_sms_for_transfer_pair(self) -> None:
         self.client.post("/manage/accounts", data={"action": "create", "name": "Cash"})
@@ -444,7 +543,7 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         tracker = ExpenseTracker(self.data_file)
         tracker.add_transaction(
             account_name="Cash",
-            payee_name="Amazon",
+            payee_name="Online shopping",
             category_name="General",
             subcategory_name="Delivery",
             amount="-88.00",
@@ -498,6 +597,21 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         self.assertIn("Card purchase", prompt_response.text)
         self.assertEqual(prompt_api["text_format_model"], "ReviewDraftTextFormat")
         self.assertEqual(prompt_api["user_payload"]["new_sms"]["content"], "Sent Rs.88.00 From HDFC Bank A/C *2054 To Amazon On 19/03/26 Ref 67890")
+        self.assertIn("Latest transactions", detail_response.text)
+        self.assertIn("Same extracted payee", detail_response.text)
+        self.assertIn("Same amount", detail_response.text)
+        self.assertIn("Same SMS sender", detail_response.text)
+        self.assertIn("latest_transactions", prompt_api["user_payload"]["similar_examples"])
+        self.assertIn("same_payee_transactions", prompt_api["user_payload"]["similar_examples"])
+        self.assertIn("same_amount_transactions", prompt_api["user_payload"]["similar_examples"])
+        self.assertIn("same_sender_transactions", prompt_api["user_payload"]["similar_examples"])
+        self.assertEqual(len(prompt_api["user_payload"]["similar_examples"]["same_payee_transactions"]), 1)
+        self.assertEqual(
+            prompt_api["user_payload"]["similar_examples"]["same_payee_transactions"][0]["historical_markers"]["merchant_hint"],
+            "Amazon",
+        )
+        self.assertEqual(len(prompt_api["user_payload"]["similar_examples"]["same_amount_transactions"]), 1)
+        self.assertEqual(len(prompt_api["user_payload"]["similar_examples"]["same_sender_transactions"]), 1)
 
     def test_sms_intake_uses_openai_draft_when_configured(self) -> None:
         with (
@@ -738,11 +852,13 @@ class ExpenseTrackerWebTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         history = generate_draft.call_args.kwargs["history"]
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0]["entry_type"], "transfer_out")
-        self.assertEqual(history[0]["account_name"], "HDFC Savings 2054")
-        self.assertEqual(history[0]["payee_name"], "Cash")
-        self.assertEqual(len(history[0]["historical_sms_messages"]), 2)
+        self.assertIn("same_sender_transactions", history)
+        self.assertEqual(len(history["same_sender_transactions"]), 1)
+        self.assertEqual(history["same_sender_transactions"][0]["entry_type"], "transfer_out")
+        self.assertEqual(history["same_sender_transactions"][0]["account_name"], "HDFC Savings 2054")
+        self.assertEqual(history["same_sender_transactions"][0]["payee_name"], "Cash")
+        self.assertEqual(history["same_sender_transactions"][0]["historical_sender"], "AX-CASHBK")
+        self.assertEqual(len(history["same_amount_transactions"]), 1)
 
 
 if __name__ == "__main__":

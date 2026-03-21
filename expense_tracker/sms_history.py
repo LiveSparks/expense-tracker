@@ -194,6 +194,133 @@ class SmsHistoryStore:
                 ]
         return results
 
+    def sender_examples(
+        self,
+        *,
+        sender: str,
+        transactions: Sequence[TransactionRecord],
+        limit: int = 3,
+    ) -> list[dict[str, object]]:
+        self._ensure_schema()
+        transaction_map = {transaction.id: transaction for transaction in transactions}
+        grouped: dict[str, tuple[str, dict[str, object]]] = {}
+        with sqlite_connection(self.data_file) as connection:
+            rows = connection.execute(
+                """
+                SELECT matched_transaction_id, contact, content, received_at, markers_json,
+                       match_reasons_json
+                FROM sms_messages
+                WHERE matched_transaction_id IS NOT NULL
+                  AND is_useful = 1
+                  AND contact = ?
+                ORDER BY received_at DESC
+                """,
+                (sender,),
+            ).fetchall()
+        for row in rows:
+            transaction = transaction_map.get(row["matched_transaction_id"])
+            if transaction is None:
+                continue
+            canonical_transaction = self._canonical_transaction(transaction, transaction_map)
+            group_key = canonical_transaction.transfer_group_id or canonical_transaction.id
+            candidate_markers = json.loads(row["markers_json"])
+            evidence = self._historical_sms_payload(
+                row=row,
+                transaction=transaction,
+                markers_payload=candidate_markers,
+            )
+            existing = grouped.get(group_key)
+            if existing is None:
+                payload = self._similar_example_payload(
+                    canonical_transaction=canonical_transaction,
+                    matched_transaction=transaction,
+                    similarity=1.0,
+                    reasons=["Historical SMS sender matched the new message sender."],
+                    markers_payload=candidate_markers,
+                    evidence=evidence,
+                )
+                grouped[group_key] = (row["received_at"], payload)
+                continue
+            received_at, payload = existing
+            payload["historical_sms_messages"] = self._merge_sms_evidence(payload["historical_sms_messages"], evidence)
+            if row["received_at"] > received_at:
+                payload["historical_sender"] = row["contact"]
+                payload["historical_sms_received_at"] = row["received_at"]
+                payload["historical_sms_excerpt"] = row["content"][:180]
+                payload["historical_markers"] = candidate_markers
+                received_at = row["received_at"]
+            grouped[group_key] = (received_at, payload)
+        ranked = sorted(grouped.values(), key=lambda item: item[0], reverse=True)
+        return [payload for _, payload in ranked[:limit]]
+
+    def merchant_examples(
+        self,
+        *,
+        merchant_hint: str,
+        transactions: Sequence[TransactionRecord],
+        limit: int = 3,
+    ) -> list[dict[str, object]]:
+        self._ensure_schema()
+        target_tokens = tokenize(merchant_hint or "")
+        if not target_tokens:
+            return []
+        transaction_map = {transaction.id: transaction for transaction in transactions}
+        grouped: dict[str, tuple[str, dict[str, object]]] = {}
+        with sqlite_connection(self.data_file) as connection:
+            rows = connection.execute(
+                """
+                SELECT matched_transaction_id, contact, content, received_at, markers_json,
+                       match_reasons_json
+                FROM sms_messages
+                WHERE matched_transaction_id IS NOT NULL
+                  AND is_useful = 1
+                ORDER BY received_at DESC
+                """
+            ).fetchall()
+        for row in rows:
+            transaction = transaction_map.get(row["matched_transaction_id"])
+            if transaction is None:
+                continue
+            candidate_markers = json.loads(row["markers_json"])
+            candidate_merchant_hint = str(candidate_markers.get("merchant_hint") or "")
+            candidate_tokens = tokenize(candidate_merchant_hint)
+            if not candidate_tokens or not (target_tokens & candidate_tokens):
+                continue
+            canonical_transaction = self._canonical_transaction(transaction, transaction_map)
+            group_key = canonical_transaction.transfer_group_id or canonical_transaction.id
+            evidence = self._historical_sms_payload(
+                row=row,
+                transaction=transaction,
+                markers_payload=candidate_markers,
+            )
+            existing = grouped.get(group_key)
+            reasons = [
+                f"Historical extracted merchant marker {candidate_merchant_hint or '(blank)'} matched the new merchant marker {merchant_hint}."
+            ]
+            if existing is None:
+                payload = self._similar_example_payload(
+                    canonical_transaction=canonical_transaction,
+                    matched_transaction=transaction,
+                    similarity=1.0,
+                    reasons=reasons,
+                    markers_payload=candidate_markers,
+                    evidence=evidence,
+                )
+                grouped[group_key] = (row["received_at"], payload)
+                continue
+            received_at, payload = existing
+            payload["historical_sms_messages"] = self._merge_sms_evidence(payload["historical_sms_messages"], evidence)
+            if row["received_at"] > received_at:
+                payload["historical_sender"] = row["contact"]
+                payload["historical_sms_received_at"] = row["received_at"]
+                payload["historical_sms_excerpt"] = row["content"][:180]
+                payload["historical_markers"] = candidate_markers
+                payload["reasons"] = reasons
+                received_at = row["received_at"]
+            grouped[group_key] = (received_at, payload)
+        ranked = sorted(grouped.values(), key=lambda item: item[0], reverse=True)
+        return [payload for _, payload in ranked[:limit]]
+
     def transaction_messages(
         self,
         *,

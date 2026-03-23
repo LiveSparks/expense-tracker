@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import secrets
 import shutil
 import threading
@@ -30,6 +32,15 @@ TEMPLATES.env.filters["display_date"] = format_display_date
 TEMPLATES.env.filters["display_datetime"] = format_display_datetime
 TEMPLATES.env.filters["list_date"] = format_list_date
 
+def _static_fingerprint(static_dir: Path) -> str:
+    """Hash the mtimes of all static files so the version changes when any file changes."""
+    h = hashlib.sha1()
+    for entry in sorted(os.scandir(static_dir), key=lambda e: e.name):
+        h.update(f"{entry.name}:{entry.stat().st_mtime_ns}".encode())
+    return h.hexdigest()[:10]
+
+STATIC_VER = _static_fingerprint(BASE_DIR / "static")
+TEMPLATES.env.globals["static_ver"] = STATIC_VER
 
 def category_options_from_tracker(tracker: ExpenseTracker) -> list[str]:
     metadata = tracker.metadata_snapshot()
@@ -306,6 +317,9 @@ def create_app(
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
     def start_review_worker() -> None:

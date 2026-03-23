@@ -5,7 +5,7 @@ import shutil
 import threading
 import tempfile
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -396,6 +396,7 @@ def create_app(
             httponly=True,
             samesite="lax",
             secure=app.state.config.secure_cookies,
+            max_age=app.state.config.cookie_max_age_seconds,
         )
         return response
 
@@ -408,12 +409,14 @@ def create_app(
     @app.get("/")
     def dashboard(request: Request):
         current_tracker = tracker()
+        balances = current_tracker.account_balances()
         return TEMPLATES.TemplateResponse(
             request,
             "dashboard.html",
             {
                 "accounts": current_tracker.account_summaries(),
-                "balances": current_tracker.account_balances(),
+                "balances": balances,
+                "total_balance": sum(balances.values()),
                 "pending_reviews": review_store().pending_count(),
                 **navigation_context(request),
             },
@@ -770,6 +773,57 @@ def create_app(
     @app.get("/manage")
     def manage_index(request: Request):
         return TEMPLATES.TemplateResponse(request, "manage_index.html", navigation_context(request))
+
+    @app.get("/manage/data")
+    def manage_data(request: Request, error: str | None = None, message: str | None = None):
+        return TEMPLATES.TemplateResponse(
+            request,
+            "manage_data.html",
+            {
+                "error": error,
+                "message": message,
+                **navigation_context(request),
+            },
+        )
+
+    @app.get("/manage/data/export")
+    def manage_data_export():
+        # Make sure the database exists before exporting it.
+        tracker().storage.load()
+        database_path: Path = app.state.data_file
+        filename = f"expense-tracker-{date.today().isoformat()}.db"
+        return FileResponse(database_path, media_type="application/octet-stream", filename=filename)
+
+    @app.post("/manage/data/import")
+    async def manage_data_import(database_file: UploadFile = File(...)):
+        uploaded_path: Path | None = None
+        try:
+            if not database_file.filename:
+                return RedirectResponse("/manage/data?error=Choose+a+database+file.", status_code=303)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as handle:
+                shutil.copyfileobj(database_file.file, handle)
+                uploaded_path = Path(handle.name)
+
+            header = uploaded_path.read_bytes()[:16]
+            if not header.startswith(b"SQLite format 3\x00"):
+                return RedirectResponse("/manage/data?error=Uploaded+file+is+not+a+valid+SQLite+database.", status_code=303)
+
+            database_path: Path = app.state.data_file
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            if database_path.exists():
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup_path = database_path.with_name(f"{database_path.name}.bak-{timestamp}")
+                shutil.copy2(database_path, backup_path)
+            shutil.move(str(uploaded_path), str(database_path))
+            uploaded_path = None
+            return RedirectResponse("/manage/data?message=Database+imported+successfully.", status_code=303)
+        except OSError:
+            return RedirectResponse("/manage/data?error=Unable+to+import+database+file.", status_code=303)
+        finally:
+            if uploaded_path and uploaded_path.exists():
+                uploaded_path.unlink()
+            database_file.file.close()
 
     @app.get("/manage/accounts")
     def manage_accounts(request: Request, error: str | None = None):

@@ -5,6 +5,10 @@
   <h1>Accounts</h1>
 </section>
 <section class="card-grid dense-grid">
+  <a class="account-card compact-card" href="/transactions">
+    <span class="account-name">All Accounts</span>
+    <span class="account-balance {% if total_balance|float < 0 %}negative{% else %}positive{% endif %}">{{ total_balance|currency }}</span>
+  </a>
   {% for account in accounts %}
     <a class="account-card compact-card" href="/transactions?account={{ account.name | urlencode }}">
       <span class="account-name">{{ account.name }}</span>

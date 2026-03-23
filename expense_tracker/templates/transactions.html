@@ -59,6 +59,9 @@
         {% for transaction in group.transactions %}
           <article class="transaction-card compact-transaction selectable-transaction" data-transaction-id="{{ transaction.id }}" data-edit-url="/transactions/{{ transaction.id }}/edit?return_to={{ current_url | urlencode }}" tabindex="0">
             <div class="transaction-main-row">
+              <label class="transaction-select-control" aria-label="Select transaction {{ transaction.payee_name }}">
+                <input type="checkbox" data-selection-checkbox>
+              </label>
               <div class="transaction-main-text">
                 <strong class="transaction-primary">{{ transaction.payee_name }}</strong>
                 <div class="transaction-meta">{{ transaction.account_name }} · {{ transaction.category_name }}{% if transaction.subcategory_name %} / {{ transaction.subcategory_name }}{% endif %}</div>

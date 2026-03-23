@@ -64,8 +64,17 @@ class ExpenseTrackerWebTests(unittest.TestCase):
 
         self.assertEqual(login.status_code, 303)
         self.assertEqual(login.headers["location"], "/")
+        self.assertIn("Max-Age=7776000", login.headers.get("set-cookie", ""))
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("Logout", dashboard.text)
+
+    def test_topbar_keeps_add_with_sidebar_menu(self) -> None:
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-add-link', response.text)
+        self.assertIn('data-sidebar-open', response.text)
+        self.assertIn('data-sidebar-close-on-nav', response.text)
 
     def test_api_requires_bearer_token_when_auth_enabled(self) -> None:
         protected_client = TestClient(
@@ -107,7 +116,7 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('class="transaction-primary">Pharmacy<', response.text)
         self.assertNotIn('class="transaction-primary">Shop 1<', response.text)
-        self.assertIn('<a href="/transactions/new?account=Credit" data-add-link>Add</a>', response.text)
+        self.assertIn('<a href="/transactions/new?account=Credit" class="button primary compact-button" data-add-link>Add</a>', response.text)
         self.assertIn("<details class=\"filter-drawer\"", response.text)
         self.assertEqual(response.text.count('type="date"'), 3)
         self.assertIn("More actions", response.text)
@@ -333,6 +342,89 @@ class ExpenseTrackerWebTests(unittest.TestCase):
         self.assertIn('"selectable": false', response.text)
         self.assertIn("data-category-dialog", response.text)
         self.assertNotIn("<datalist", response.text)
+
+    def test_dashboard_shows_all_accounts_card(self) -> None:
+        self.client.post(
+            "/api/transactions",
+            data={
+                "account_name": "Cash",
+                "payee_name": "Employer",
+                "category_value": "Income / Salary",
+                "amount": "500.00",
+                "spent_on": "2026-03-10",
+            },
+        )
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("All Accounts", response.text)
+        self.assertIn('href="/transactions"', response.text)
+
+    def test_manage_data_page_and_export_endpoint(self) -> None:
+        self.client.post(
+            "/api/transactions",
+            data={
+                "account_name": "Cash",
+                "payee_name": "Employer",
+                "category_value": "Income / Salary",
+                "amount": "500.00",
+                "spent_on": "2026-03-10",
+            },
+        )
+
+        manage_page = self.client.get("/manage/data")
+        export_response = self.client.get("/manage/data/export")
+
+        self.assertEqual(manage_page.status_code, 200)
+        self.assertIn("Import database", manage_page.text)
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(export_response.headers.get("content-type"), "application/octet-stream")
+        self.assertIn("attachment", export_response.headers.get("content-disposition", ""))
+
+    def test_manage_data_import_rejects_non_sqlite_file(self) -> None:
+        response = self.client.post(
+            "/manage/data/import",
+            files={"database_file": ("bad.txt", b"not a sqlite file", "text/plain")},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("/manage/data?error=Uploaded+file+is+not+a+valid+SQLite+database.", response.headers["location"])
+
+    def test_manage_data_import_replaces_database(self) -> None:
+        self.client.post(
+            "/api/transactions",
+            data={
+                "account_name": "Old",
+                "payee_name": "Legacy",
+                "category_value": "General / Grocery",
+                "amount": "-10.00",
+                "spent_on": "2026-03-01",
+            },
+        )
+
+        source_path = Path(self.temp_dir.name) / "incoming.db"
+        source_tracker = ExpenseTracker(source_path)
+        source_tracker.add_transaction(
+            account_name="New",
+            payee_name="Imported",
+            category_name="General",
+            subcategory_name="Delivery",
+            amount="-20.00",
+            spent_on="2026-03-15",
+        )
+        with source_path.open("rb") as file_handle:
+            response = self.client.post(
+                "/manage/data/import",
+                files={"database_file": ("incoming.db", file_handle, "application/octet-stream")},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/manage/data?message=Database+imported+successfully.")
+        transactions = self.client.get("/api/transactions").json()["transactions"]
+        self.assertEqual(len(transactions), 1)
+        self.assertEqual(transactions[0]["payee_name"], "Imported")
 
     def test_category_group_value_is_rejected(self) -> None:
         response = self.client.post(

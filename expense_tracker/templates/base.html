@@ -10,18 +10,28 @@
   <body>
     <header class="topbar">
       <a href="/" class="brand">Expense Tracker</a>
-      <nav class="nav-links">
-        <a href="/transactions">Transactions</a>
-        <a href="/reviews">Reviews</a>
-        <a href="{{ add_transaction_href if add_transaction_href is defined else '/transactions/new' }}" data-add-link>Add</a>
-        <a href="/manage">Manage</a>
+      <div class="topbar-actions">
+        <a href="{{ add_transaction_href if add_transaction_href is defined else '/transactions/new' }}" class="button primary compact-button" data-add-link>Add</a>
+        <button class="icon-button" type="button" data-sidebar-open aria-label="Open menu">☰</button>
+      </div>
+    </header>
+    <aside class="sidebar-drawer" data-sidebar>
+      <div class="sidebar-backdrop" data-sidebar-close></div>
+      <nav class="sidebar-panel" aria-label="Main menu">
+        <div class="sidebar-head">
+          <strong>Menu</strong>
+          <button class="icon-button" type="button" data-sidebar-close aria-label="Close menu">×</button>
+        </div>
+        <a href="/transactions" data-sidebar-close-on-nav>Transactions</a>
+        <a href="/reviews" data-sidebar-close-on-nav>Reviews</a>
+        <a href="/manage" data-sidebar-close-on-nav>Manage</a>
         {% if request.app.state.config.auth_enabled %}
           <form method="post" action="/auth/logout" class="inline-delete-form">
             <button class="button compact-button" type="submit">Logout</button>
           </form>
         {% endif %}
       </nav>
-    </header>
+    </aside>
     <main class="page-shell">{% block content %}{% endblock %}</main>
   </body>
 </html>

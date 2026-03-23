@@ -8,6 +8,16 @@
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 <form class="stack-form card-form compact-form" method="post" enctype="multipart/form-data" action="{% if mode == 'edit' %}/transactions/{{ transaction.id }}/edit{% else %}/transactions{% endif %}">
   <input type="hidden" name="return_to" value="{{ return_to }}">
+  <div class="split-row compact-gap compact-split">
+    <div>
+      <label>Amount</label>
+      <input name="amount" value="{{ selected_amount }}" inputmode="decimal" required {% if mode == 'create' %}autofocus{% endif %}>
+    </div>
+    <div>
+      <label>Date</label>
+      <input name="spent_on" type="date" value="{{ selected_spent_on }}" required>
+    </div>
+  </div>
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
     <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required data-select-on-focus>
@@ -28,16 +38,6 @@
     <input class="picker-input" name="category_value" value="{{ selected_category or ((transaction.category_name ~ ' / ' ~ transaction.subcategory_name) if transaction and transaction.subcategory_name else (transaction.category_name if transaction else '')) }}" autocomplete="off" placeholder="Choose a subcategory" required data-select-on-focus>
     <button class="picker-toggle" type="button" aria-label="Show category options">▾</button>
     <div class="picker-menu"></div>
-  </div>
-  <div class="split-row compact-gap compact-split">
-    <div>
-      <label>Amount</label>
-      <input name="amount" value="{{ selected_amount }}" inputmode="decimal" required {% if mode == 'create' %}autofocus{% endif %}>
-    </div>
-    <div>
-      <label>Date</label>
-      <input name="spent_on" type="date" value="{{ selected_spent_on }}" required>
-    </div>
   </div>
   <label>Files</label>
   <input name="files" type="file" multiple>

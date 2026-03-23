@@ -21,6 +21,7 @@ class ConfigTests(unittest.TestCase):
                     "EXPENSE_TRACKER_OPENAI_API_KEY_FILE": str(openai_path),
                     "EXPENSE_TRACKER_ALLOWED_HOSTS": "tracker.example.com,10.0.0.5",
                     "EXPENSE_TRACKER_SECURE_COOKIES": "true",
+                    "EXPENSE_TRACKER_COOKIE_MAX_AGE_SECONDS": "1234",
                 }
             )
             self.assertTrue(config.auth_enabled)
@@ -28,6 +29,12 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.resolved_openai_api_key, "openai-secret")
             self.assertEqual(config.allowed_hosts, ("tracker.example.com", "10.0.0.5"))
             self.assertTrue(config.secure_cookies)
+            self.assertEqual(config.cookie_max_age_seconds, 1234)
+
+    def test_cookie_max_age_uses_default_on_invalid_value(self) -> None:
+        config = load_app_config({"EXPENSE_TRACKER_COOKIE_MAX_AGE_SECONDS": "invalid"})
+
+        self.assertEqual(config.cookie_max_age_seconds, 60 * 60 * 24 * 90)
 
     def test_explicit_app_config_values_override_files(self) -> None:
         config = AppConfig(

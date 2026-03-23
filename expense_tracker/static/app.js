@@ -13,6 +13,19 @@ function initPicker(root) {
   const allowCustom = root.dataset.allowCustom !== 'false';
   const options = JSON.parse(root.dataset.options || '[]');
 
+  const selectableOptions = options.filter((option) => option.kind !== 'category');
+  const findExactMatch = (value) => {
+    const normalized = normalizeValue(value);
+    if (!normalized) {
+      return null;
+    }
+    return selectableOptions.find((option) => {
+      const optionValue = normalizeValue(option.value || '');
+      const optionLabel = normalizeValue(option.label || '');
+      return optionValue === normalized || optionLabel === normalized;
+    }) || null;
+  };
+
   const renderOptions = (query = '') => {
     const normalizedQuery = normalizeValue(query);
     const fragments = [];
@@ -78,6 +91,12 @@ function initPicker(root) {
 
   input.addEventListener('focus', openMenu);
   input.addEventListener('input', () => {
+    const exactMatch = findExactMatch(input.value);
+    if (exactMatch) {
+      input.value = exactMatch.value || exactMatch.label || input.value;
+      closeMenu();
+      return;
+    }
     renderOptions(input.value);
     root.classList.add('is-open');
   });
@@ -88,14 +107,6 @@ function initPicker(root) {
       openMenu();
       input.focus();
     }
-  });
-  menu.addEventListener('pointerdown', (event) => {
-    const option = event.target.closest('[data-value]');
-    if (!option) {
-      return;
-    }
-    event.preventDefault();
-    selectValue(option.dataset.value || '');
   });
   menu.addEventListener('click', (event) => {
     const option = event.target.closest('[data-value]');
@@ -224,11 +235,18 @@ function initSelectionMode() {
   const inputsRoot = bulkForm.querySelector('[data-selection-inputs]');
   const countNode = bulkForm.querySelector('[data-selection-count]');
   const clearButton = bulkForm.querySelector('[data-clear-selection]');
+  const desktopQuery = window.matchMedia('(min-width: 700px)');
   let selectionMode = false;
 
   const syncState = () => {
+    const desktopCheckboxesVisible = desktopQuery.matches;
     root.querySelectorAll('[data-transaction-id]').forEach((row) => {
       row.classList.toggle('is-selected', selected.has(row.dataset.transactionId));
+      const checkbox = row.querySelector('[data-selection-checkbox]');
+      if (checkbox instanceof HTMLInputElement) {
+        checkbox.checked = selected.has(row.dataset.transactionId);
+        checkbox.tabIndex = desktopCheckboxesVisible ? 0 : -1;
+      }
     });
     root.querySelectorAll('[data-date-group]').forEach((group) => {
       const rowIds = [...group.querySelectorAll('[data-transaction-id]')].map((row) => row.dataset.transactionId).filter(Boolean);
@@ -287,7 +305,7 @@ function initSelectionMode() {
     row.addEventListener('pointercancel', clearPress);
     row.addEventListener('contextmenu', (event) => event.preventDefault());
     row.addEventListener('click', (event) => {
-      const interactiveTarget = event.target.closest('a, button, input');
+      const interactiveTarget = event.target.closest('a, button, input, label');
       if (interactiveTarget) {
         return;
       }
@@ -339,6 +357,35 @@ function initSelectionMode() {
       syncState();
     });
   });
+
+  root.querySelectorAll('[data-selection-checkbox]').forEach((checkboxNode) => {
+    checkboxNode.addEventListener('change', () => {
+      if (!(checkboxNode instanceof HTMLInputElement)) {
+        return;
+      }
+      const row = checkboxNode.closest('[data-transaction-id]');
+      if (!row) {
+        return;
+      }
+      const id = row.dataset.transactionId;
+      if (!id) {
+        return;
+      }
+      if (checkboxNode.checked) {
+        selected.add(id);
+      } else {
+        selected.delete(id);
+      }
+      syncState();
+    });
+  });
+
+  const syncDesktopVisibility = () => {
+    root.classList.toggle('is-desktop-selection', desktopQuery.matches);
+    syncState();
+  };
+  syncDesktopVisibility();
+  desktopQuery.addEventListener('change', syncDesktopVisibility);
 }
 
 function initInlineEditors() {
@@ -485,6 +532,52 @@ function initManageDeleteDialogs() {
   });
 }
 
+function initCreateAmountCaretPosition() {
+  const amountInput = document.querySelector('input[name="amount"][autofocus]');
+  if (!(amountInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    if (document.activeElement !== amountInput) {
+      return;
+    }
+    if (amountInput.value.startsWith('-')) {
+      amountInput.setSelectionRange(1, 1);
+    }
+  });
+}
+
+function initSidebar() {
+  const sidebar = document.querySelector('[data-sidebar]');
+  const openButton = document.querySelector('[data-sidebar-open]');
+  if (!sidebar || !openButton) {
+    return;
+  }
+  const closeButtons = sidebar.querySelectorAll('[data-sidebar-close]');
+  const closeOnNavigate = sidebar.querySelectorAll('[data-sidebar-close-on-nav]');
+
+  const closeSidebar = () => {
+    document.body.classList.remove('has-sidebar-open');
+  };
+
+  openButton.addEventListener('click', () => {
+    document.body.classList.add('has-sidebar-open');
+  });
+
+  closeButtons.forEach((button) => {
+    button.addEventListener('click', closeSidebar);
+  });
+  closeOnNavigate.forEach((link) => {
+    link.addEventListener('click', closeSidebar);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeSidebar();
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initScrollRestoration();
   document.querySelectorAll('.js-picker').forEach(initPicker);
@@ -494,4 +587,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initInlineEditors();
   initConfirmActions();
   initManageDeleteDialogs();
+  initCreateAmountCaretPosition();
+  initSidebar();
 });

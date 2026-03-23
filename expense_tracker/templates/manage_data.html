@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Data · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head">
+  <h1>Data tools</h1>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+{% if message %}<div class="success-banner">{{ message }}</div>{% endif %}
+<section class="card-grid dense-grid">
+  <article class="card-form compact-form stack-form">
+    <h2>Export database</h2>
+    <p class="muted">Download the current SQLite database file.</p>
+    <a class="button compact-button" href="/manage/data/export">Download database</a>
+  </article>
+  <article class="card-form compact-form stack-form">
+    <h2>Import database</h2>
+    <p class="muted">Upload a SQLite database file. This replaces current data and creates a timestamped backup first.</p>
+    <form class="stack-form" method="post" action="/manage/data/import" enctype="multipart/form-data">
+      <label>SQLite file</label>
+      <input name="database_file" type="file" accept=".db,.sqlite,.sqlite3,.json,application/octet-stream" required>
+      <button class="button danger compact-button" type="submit" data-confirm-message="Importing replaces current data. Continue?">Import and replace</button>
+    </form>
+  </article>
+</section>
+{% endblock %}

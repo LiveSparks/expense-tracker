@@ -33,6 +33,16 @@ def _parse_csv(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...
     return items or default
 
 
+def _parse_int(value: str | None, *, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _secret_from_sources(
     *,
     direct_value: str | None,
@@ -65,6 +75,7 @@ class AppConfig:
     auth_token_file: Path | None = None
     secure_cookies: bool = False
     cookie_name: str = "expense_tracker_auth"
+    cookie_max_age_seconds: int = 60 * 60 * 24 * 90
     allowed_hosts: tuple[str, ...] = ("*",)
 
     @property
@@ -96,5 +107,6 @@ def load_app_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         auth_token_file=_parse_path(env.get("EXPENSE_TRACKER_AUTH_TOKEN_FILE")),
         secure_cookies=_parse_bool(env.get("EXPENSE_TRACKER_SECURE_COOKIES"), default=False),
         cookie_name=(env.get("EXPENSE_TRACKER_COOKIE_NAME") or "expense_tracker_auth").strip() or "expense_tracker_auth",
+        cookie_max_age_seconds=_parse_int(env.get("EXPENSE_TRACKER_COOKIE_MAX_AGE_SECONDS"), default=60 * 60 * 24 * 90),
         allowed_hosts=_parse_csv(env.get("EXPENSE_TRACKER_ALLOWED_HOSTS"), default=("*",)),
     )

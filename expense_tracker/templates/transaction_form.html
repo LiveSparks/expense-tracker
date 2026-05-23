@@ -18,6 +18,9 @@
       <input name="spent_on" type="date" value="{{ selected_spent_on }}" required>
     </div>
   </div>
+  {% if mode == 'edit' and transaction and transaction.created_at %}
+    <div class="transaction-meta" style="font-size:.8125rem;opacity:.65;margin-top:-.25rem">Created at {{ transaction.created_at | display_datetime }}</div>
+  {% endif %}
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
     <input class="picker-input" name="account_name" value="{{ selected_account or (transaction.account_name if transaction else '') }}" autocomplete="off" required data-select-on-focus>

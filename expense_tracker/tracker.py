@@ -214,7 +214,7 @@ class ExpenseTracker:
             if parsed_end_date and record.spent_on > parsed_end_date:
                 continue
             filtered.append(record)
-        return sorted(filtered, key=lambda item: (item.spent_on, item.id), reverse=True)
+        return sorted(filtered, key=lambda item: (item.spent_on, item.created_at), reverse=True)
 
     def account_balances(self) -> dict[str, Decimal]:
         ledger = self.storage.load()
@@ -941,6 +941,7 @@ class ExpenseTracker:
             amount=transaction.amount,
             notes=transaction.notes,
             spent_on=transaction.spent_on,
+            created_at=transaction.created_at,
             linked_transaction_id=transaction.linked_transaction_id,
             transfer_group_id=transaction.transfer_group_id,
             attachments=attachments,

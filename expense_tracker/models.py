@@ -210,6 +210,7 @@ class TransactionRecord:
     amount: Decimal
     notes: str
     spent_on: date
+    created_at: datetime
     linked_transaction_id: str | None
     transfer_group_id: str | None
     attachments: list[Attachment]

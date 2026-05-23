@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Logs · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head">
+  <h1>SMS Logs</h1>
+</section>
+<form class="filter-drawer" method="get" style="display:block">
+  <div class="split-row compact-gap compact-split actions-row">
+    <select name="event_type" class="picker-input">
+      <option value="">All events</option>
+      {% for et in event_types %}
+        <option value="{{ et }}" {% if event_type == et %}selected{% endif %}>{{ et | capitalize }}</option>
+      {% endfor %}
+    </select>
+    <button class="button primary compact-button" type="submit">Filter</button>
+    {% if event_type %}<a class="button compact-button" href="/logs">Clear</a>{% endif %}
+  </div>
+</form>
+<section class="summary-strip compact-summary">
+  <span>{{ total }} log entries</span>
+  {% if event_type %}<span>Showing: {{ event_type }}</span>{% endif %}
+</section>
+{% if entries %}
+  <section class="list-stack dense-list">
+    {% for entry in entries %}
+      <article class="transaction-card compact-transaction">
+        <div class="transaction-main-row">
+          <div class="transaction-main-text">
+            <strong class="transaction-primary log-event-type log-event-{{ entry.event_type }}">{{ entry.event_type | upper }}</strong>
+            <div class="transaction-meta">
+              {{ entry.created_at | display_datetime }}
+              {% if entry.sender %} · {{ entry.sender }}{% endif %}
+              {% if entry.review_id %} · <a href="/reviews/{{ entry.review_id }}">View review</a>{% endif %}
+            </div>
+            {% if entry.content_excerpt %}
+              <div class="transaction-notes sms-preview">{{ entry.content_excerpt }}</div>
+            {% endif %}
+            {% if entry.event_details %}
+              <details class="review-panel" style="margin-top:.25rem">
+                <summary style="cursor:pointer;font-size:.85rem;opacity:.75">Details</summary>
+                <ul class="review-list">
+                  {% for key, value in entry.event_details.items() %}
+                    <li>
+                      <strong>{{ key }}:</strong>
+                      {% if value is iterable and value is not string %}
+                        {% for item in value %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}
+                      {% else %}
+                        {{ value }}
+                      {% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+  {% if total_pages > 1 %}
+    <nav class="split-row compact-gap compact-split actions-row" style="margin-top:1rem">
+      {% if page > 1 %}
+        <a class="button compact-button" href="/logs?{% if event_type %}event_type={{ event_type }}&{% endif %}page={{ page - 1 }}">← Prev</a>
+      {% else %}
+        <span></span>
+      {% endif %}
+      <span style="align-self:center;font-size:.875rem;opacity:.7">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}
+        <a class="button compact-button" href="/logs?{% if event_type %}event_type={{ event_type }}&{% endif %}page={{ page + 1 }}">Next →</a>
+      {% else %}
+        <span></span>
+      {% endif %}
+    </nav>
+  {% endif %}
+{% else %}
+  <div class="empty-card">No log entries found.</div>
+{% endif %}
+{% endblock %}

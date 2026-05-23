@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - exercised only when dependency is miss
     OpenAI = None
 
 from .config import AppConfig, load_app_config
+from .migrations import apply_migrations
 from .models import MetadataSnapshot, TransactionRecord
 from .sms_history import SmsHistoryStore
 from .sms_pipeline import (
@@ -278,7 +279,65 @@ class ReviewWorkflowStore:
         self._ensure_schema()
         with sqlite_connection(self.data_file) as connection:
             cursor = connection.execute("DELETE FROM sms_reviews WHERE id = ?", (review_id,))
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        if deleted:
+            self._log_event(
+                event_type="deleted",
+                review_id=review_id,
+                sender="",
+                content="",
+                details={"review_id": review_id},
+            )
+        return deleted
+
+    # ------------------------------------------------------------------
+    # Log queries
+    # ------------------------------------------------------------------
+
+    def list_log_entries(
+        self,
+        *,
+        event_type: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """Return log entries ordered newest-first."""
+        self._ensure_schema()
+        apply_migrations(self.data_file)
+        query = "SELECT * FROM sms_log"
+        params: list[object] = []
+        if event_type:
+            query += " WHERE event_type = ?"
+            params.append(event_type)
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        with sqlite_connection(self.data_file) as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "created_at": row["created_at"],
+                "event_type": row["event_type"],
+                "review_id": row["review_id"],
+                "sender": row["sender"],
+                "content_excerpt": row["content_excerpt"],
+                "event_details": json.loads(row["event_details_json"]),
+            }
+            for row in rows
+        ]
+
+    def log_entry_count(self, *, event_type: str | None = None) -> int:
+        """Return total count of log entries."""
+        self._ensure_schema()
+        apply_migrations(self.data_file)
+        if event_type:
+            query = "SELECT COUNT(*) FROM sms_log WHERE event_type = ?"
+            params: tuple[object, ...] = (event_type,)
+        else:
+            query = "SELECT COUNT(*) FROM sms_log"
+            params = ()
+        with sqlite_connection(self.data_file) as connection:
+            return int(connection.execute(query, params).fetchone()[0])
 
     def enqueue_review(
         self,
@@ -326,6 +385,17 @@ class ReviewWorkflowStore:
             approved_transaction_id=None,
         )
         self._insert_review(review)
+        self._log_event(
+            event_type="filtered" if filter_reasons else "intake",
+            review_id=review.id,
+            sender=message.contact,
+            content=message.content,
+            details={
+                "status": review.review_status,
+                "source": review.source,
+                "filter_reasons": filter_reasons,
+            },
+        )
         return review
 
     def create_review(
@@ -380,6 +450,19 @@ class ReviewWorkflowStore:
                 source=row["source"],
             )
             self._update_review(review)
+            self._log_event(
+                event_type="filtered" if review.review_status == "filtered" else "processed",
+                review_id=review.id,
+                sender=review.sender,
+                content=review.content,
+                details={
+                    "status": review.review_status,
+                    "source": review.source,
+                    "draft_payee": review.draft_payee_name,
+                    "draft_amount": review.draft_amount,
+                    "reasoning": review.reasoning,
+                },
+            )
             processed += 1
         return processed
 
@@ -441,6 +524,20 @@ class ReviewWorkflowStore:
             received_at=review.received_at,
             markers_payload=review.markers,
             matched_transaction_id=approved_transaction_id,
+        )
+        self._log_event(
+            event_type="approved",
+            review_id=review_id,
+            sender=review.sender,
+            content=review.content,
+            details={
+                "approved_transaction_id": approved_transaction_id,
+                "account_name": account_name,
+                "payee_name": payee_name,
+                "category_value": category_value,
+                "amount": amount,
+                "spent_on": spent_on,
+            },
         )
         return created
 
@@ -964,6 +1061,37 @@ class ReviewWorkflowStore:
                 )
                 """
             )
+        apply_migrations(self.data_file)
+
+    def _log_event(
+        self,
+        *,
+        event_type: str,
+        review_id: str | None,
+        sender: str,
+        content: str,
+        details: dict[str, object],
+    ) -> None:
+        try:
+            with sqlite_connection(self.data_file) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO sms_log (id, created_at, event_type, review_id, sender,
+                                        content_excerpt, event_details_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        datetime.now(UTC).isoformat(),
+                        event_type,
+                        review_id,
+                        sender,
+                        content[:200],
+                        json.dumps(details),
+                    ),
+                )
+        except Exception:
+            pass  # logging failures must never break the main flow
 
     def _row_to_review(self, row: sqlite3.Row) -> ReviewDraft:
         similar_examples = json.loads(row["similar_examples_json"])

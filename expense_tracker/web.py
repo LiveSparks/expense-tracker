@@ -538,6 +538,38 @@ def create_app(
         review_store().delete_review(review_id)
         return RedirectResponse(normalize_return_to(return_to, "/reviews"), status_code=303)
 
+    @app.get("/logs")
+    def logs_page(
+        request: Request,
+        event_type: str | None = None,
+        page: int = 1,
+    ):
+        per_page = 50
+        offset = (max(page, 1) - 1) * per_page
+        current_review_store = review_store()
+        entries = current_review_store.list_log_entries(
+            event_type=event_type or None,
+            limit=per_page,
+            offset=offset,
+        )
+        total = current_review_store.log_entry_count(event_type=event_type or None)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        event_types = ["intake", "filtered", "processed", "approved", "deleted", "error"]
+        return TEMPLATES.TemplateResponse(
+            request,
+            "logs.html",
+            {
+                "entries": entries,
+                "event_type": event_type or "",
+                "event_types": event_types,
+                "page": page,
+                "total_pages": total_pages,
+                "total": total,
+                "current_url": request_relative_url(request),
+                **navigation_context(request),
+            },
+        )
+
     @app.get("/reviews/{review_id}/llm-request")
     def review_llm_request(request: Request, review_id: str, return_to: str | None = None):
         current_review = review_store().get_review(review_id)

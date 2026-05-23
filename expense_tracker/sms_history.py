@@ -261,8 +261,8 @@ class SmsHistoryStore:
         limit: int = 3,
     ) -> list[dict[str, object]]:
         self._ensure_schema()
-        target_tokens = tokenize(merchant_hint or "")
-        if not target_tokens:
+        normalized_target = (merchant_hint or "").strip().casefold()
+        if not normalized_target:
             return []
         transaction_map = {transaction.id: transaction for transaction in transactions}
         grouped: dict[str, tuple[str, dict[str, object]]] = {}
@@ -283,8 +283,8 @@ class SmsHistoryStore:
                 continue
             candidate_markers = json.loads(row["markers_json"])
             candidate_merchant_hint = str(candidate_markers.get("merchant_hint") or "")
-            candidate_tokens = tokenize(candidate_merchant_hint)
-            if not candidate_tokens or not (target_tokens & candidate_tokens):
+            # Require exact case-insensitive match instead of token overlap
+            if candidate_merchant_hint.strip().casefold() != normalized_target:
                 continue
             canonical_transaction = self._canonical_transaction(transaction, transaction_map)
             group_key = canonical_transaction.transfer_group_id or canonical_transaction.id

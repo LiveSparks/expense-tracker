@@ -34,6 +34,10 @@
 </section>
 <form class="stack-form card-form compact-form" method="post" action="/reviews/{{ review.id }}/approve">
   <input type="hidden" name="return_to" value="{{ return_to }}">
+  <div class="split-row compact-gap compact-split actions-row">
+    <button class="button primary compact-button" type="submit">Approve transaction</button>
+    <a class="button compact-button" href="{{ return_to }}">Cancel</a>
+  </div>
   <label>Account</label>
   <div class="picker js-picker" data-options='{{ account_picker_options | tojson }}' data-allow-custom="true">
     <input class="picker-input" name="account_name" value="{{ selected_account }}" autocomplete="off" required>
@@ -75,8 +79,8 @@
     </section>
   {% endif %}
   {% if review.similar_examples %}
-    <section class="review-panel">
-      <strong>Similar history</strong>
+    <details class="review-panel">
+      <summary style="cursor:pointer"><strong>Similar history</strong></summary>
       {% set history_sections = [
         ('latest_transactions', 'Latest transactions'),
         ('same_payee_transactions', 'Same extracted payee'),
@@ -104,7 +108,7 @@
           </div>
         {% endif %}
       {% endfor %}
-    </section>
+    </details>
   {% endif %}
   <div class="split-row compact-gap compact-split actions-row">
     <button class="button primary compact-button" type="submit">Approve transaction</button>
@@ -116,3 +120,4 @@
   <button class="button danger compact-button full-width" type="submit" data-confirm-message="Delete this review draft?">Delete draft</button>
 </form>
 {% endblock %}
+

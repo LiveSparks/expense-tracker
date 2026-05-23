@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 def format_inr(value: Decimal | str | int | float) -> str:
@@ -39,12 +39,29 @@ def format_display_date(value: date | datetime | str) -> str:
     return value.strftime("%d/%m/%Y")
 
 
-def format_list_date(value: date | datetime | str) -> str:
+def format_list_date(value: date | datetime | str, *, today: date | None = None) -> str:
+    """Format a date for the transaction list.
+
+    Dates within the last 7 days include the weekday name prefix,
+    e.g. "Today, 23 May 2026", "Yesterday, 22 May 2026", "Monday, 20 May 2026".
+    Older dates use the plain form "19 May, 2026".
+    """
     if isinstance(value, str):
         try:
             value = date.fromisoformat(value)
         except ValueError:
             value = datetime.fromisoformat(value)
+    if isinstance(value, datetime):
+        value = value.date()
+    if today is None:
+        today = date.today()
+    delta = (today - value).days
+    if delta == 0:
+        return "Today, " + value.strftime("%d %B %Y")
+    if delta == 1:
+        return "Yesterday, " + value.strftime("%d %B %Y")
+    if 2 <= delta <= 6:
+        return value.strftime("%A, %d %B %Y")
     return value.strftime("%d %B, %Y")
 
 

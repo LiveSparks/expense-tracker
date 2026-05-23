@@ -9,13 +9,20 @@
   <body>
     <main class="page-shell">
       <section class="page-head compact-head compact-head-row">
-        <h1>Enter access token</h1>
+        <h1>{% if auth_mode == 'password' %}Sign in{% else %}Enter access token{% endif %}</h1>
       </section>
       {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
       <form class="stack-form card-form compact-form" method="post" action="/auth/login">
         <input type="hidden" name="next" value="{{ next }}">
-        <label>Token</label>
-        <input name="token" type="password" autocomplete="current-password" autofocus required>
+        {% if auth_mode == 'password' %}
+          <label>Username</label>
+          <input name="username" autocomplete="username" autofocus required>
+          <label>Password</label>
+          <input name="password" type="password" autocomplete="current-password" required>
+        {% else %}
+          <label>Token</label>
+          <input name="token" type="password" autocomplete="current-password" autofocus required>
+        {% endif %}
         <div class="split-row compact-gap compact-split actions-row">
           <button class="button primary compact-button" type="submit">Login</button>
         </div>

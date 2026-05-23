@@ -259,6 +259,24 @@ class ExpenseTracker:
             total += transaction.amount
         return total
 
+    def toggle_verified(self, transaction_id: str) -> bool:
+        ledger = self.storage.load()
+        transaction = next((item for item in ledger.transactions if item.id == transaction_id), None)
+        if transaction is None:
+            raise ValueError("Transaction was not found.")
+        transaction.verified = not bool(transaction.verified)
+        self.storage.save(ledger)
+        return transaction.verified
+
+    def set_verified(self, transaction_id: str, verified: bool) -> bool:
+        ledger = self.storage.load()
+        transaction = next((item for item in ledger.transactions if item.id == transaction_id), None)
+        if transaction is None:
+            raise ValueError("Transaction was not found.")
+        transaction.verified = bool(verified)
+        self.storage.save(ledger)
+        return transaction.verified
+
     def _delete_transaction_ids(self, ledger: LedgerData, transaction_ids: set[str]) -> None:
         if transaction_ids:
             with sqlite_connection(self.storage.data_file) as connection:
@@ -451,6 +469,7 @@ class ExpenseTracker:
                     notes=notes,
                     spent_on=spent_on,
                     created_at=datetime.combine(spent_on, datetime.min.time(), tzinfo=UTC),
+                    verified=False,
                 )
             )
         self.storage.save(ledger)
@@ -708,6 +727,8 @@ class ExpenseTracker:
         primary_transaction_id = str(uuid4())
         secondary_transaction_id: str | None = None
         transfer_group_id: str | None = None
+        primary_verified = False
+        secondary_verified = False
 
         if original_transaction_id is not None:
             target = next((item for item in ledger.transactions if item.id == original_transaction_id), None)
@@ -717,6 +738,9 @@ class ExpenseTracker:
             primary_transaction_id = original_transaction_id
             secondary_transaction_id = target.linked_transaction_id
             transfer_group_id = target.transfer_group_id
+            primary_verified = bool(target.verified)
+            partner = next((item for item in ledger.transactions if item.id == target.linked_transaction_id), None)
+            secondary_verified = bool(partner.verified) if partner is not None else False
             existing_primary_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id == original_transaction_id]
             removed_linked_attachments = [attachment for attachment in ledger.attachments if attachment.transaction_id in linked_ids and attachment.transaction_id != original_transaction_id]
             for attachment in removed_linked_attachments:
@@ -756,6 +780,7 @@ class ExpenseTracker:
                 created_at=created_at,
                 linked_transaction_id=secondary_transaction_id,
                 transfer_group_id=transfer_group_id,
+                verified=primary_verified,
             )
             destination_account = self._require_account(ledger, payee.linked_account_id)
             source_account_payee = self._ensure_linked_payee(ledger, account)
@@ -772,6 +797,7 @@ class ExpenseTracker:
                 created_at=created_at,
                 linked_transaction_id=primary_transaction_id,
                 transfer_group_id=transfer_group_id,
+                verified=secondary_verified,
             )
             ledger.transactions.extend([source_transaction, destination_transaction])
             created_transactions.extend([source_transaction, destination_transaction])
@@ -790,6 +816,7 @@ class ExpenseTracker:
                 notes=normalized_notes,
                 spent_on=parsed_date,
                 created_at=created_at,
+                verified=primary_verified,
             )
             ledger.transactions.append(transaction)
             created_transactions.append(transaction)
@@ -889,6 +916,7 @@ class ExpenseTracker:
                     created_at=seed_transaction.created_at,
                     linked_transaction_id=transaction_id_map.get(seed_transaction.linked_transaction_id) if seed_transaction.linked_transaction_id else None,
                     transfer_group_id=seed_transaction.transfer_group_id,
+                    verified=seed_transaction.verified,
                 )
             )
             summary["transactions_added"] += 1
@@ -944,6 +972,7 @@ class ExpenseTracker:
             created_at=transaction.created_at,
             linked_transaction_id=transaction.linked_transaction_id,
             transfer_group_id=transaction.transfer_group_id,
+            verified=transaction.verified,
             attachments=attachments,
         )
 

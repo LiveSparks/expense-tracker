@@ -273,3 +273,12 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.85; cursor: p
   .manage-add-grid { grid-template-columns: 1fr; }
   .search-bar { grid-template-columns: 1fr; }
 }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th, td { padding: 0.55rem 0.45rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.verified-badge { display:inline-flex; align-items:center; justify-content:center; width:1.25rem; height:1.25rem; border-radius:50%; background:var(--positive); color:#fff; font-size:.7rem; cursor:pointer; border:none; padding:0; flex-shrink:0; }
+.verified-badge.unverified { background:transparent; border:1.5px solid var(--border); color:var(--muted); }
+.api-key-reveal { font-family:monospace; padding:.4rem .6rem; background:var(--card-alt); border:1px solid var(--border); border-radius:6px; word-break:break-all; font-size:.85rem; margin-top: 0.4rem; }

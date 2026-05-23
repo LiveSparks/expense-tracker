@@ -548,6 +548,34 @@ function initCreateAmountCaretPosition() {
   });
 }
 
+
+function initVerifiedToggles() {
+  document.querySelectorAll('[data-verify-form]').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      if (!(form instanceof HTMLFormElement)) {
+        return;
+      }
+      event.preventDefault();
+      const button = form.querySelector('[data-verify-button]');
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          body: new FormData(form),
+        });
+        if (!response.ok) {
+          form.submit();
+          return;
+        }
+        const payload = await response.json();
+        button?.classList.toggle('unverified', !payload.verified);
+      } catch (_error) {
+        form.submit();
+      }
+    });
+  });
+}
+
 function initSidebar() {
   const sidebar = document.querySelector('[data-sidebar]');
   const openButton = document.querySelector('[data-sidebar-open]');
@@ -588,5 +616,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initConfirmActions();
   initManageDeleteDialogs();
   initCreateAmountCaretPosition();
+  initVerifiedToggles();
   initSidebar();
 });

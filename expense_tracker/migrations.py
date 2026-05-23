@@ -24,13 +24,6 @@ from typing import Sequence
 from .sqlite_utils import sqlite_connection
 
 
-# ---------------------------------------------------------------------------
-# Migration definitions
-# ---------------------------------------------------------------------------
-# Each entry: (version: int, sql: str)
-# Version numbers must be unique, positive, and ideally contiguous.
-# ---------------------------------------------------------------------------
-
 MIGRATIONS: Sequence[tuple[int, str]] = [
     (
         1,
@@ -49,12 +42,72 @@ MIGRATIONS: Sequence[tuple[int, str]] = [
         CREATE INDEX IF NOT EXISTS idx_sms_log_review_id ON sms_log(review_id);
         """,
     ),
+    (
+        2,
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+        """,
+    ),
+    (
+        3,
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            name TEXT NOT NULL,
+            key_hash TEXT NOT NULL UNIQUE,
+            key_prefix TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+        """,
+    ),
+    (
+        4,
+        """
+        CREATE TABLE IF NOT EXISTS backup_settings (
+            id INTEGER PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            interval_hours INTEGER NOT NULL DEFAULT 24,
+            retention_count INTEGER NOT NULL DEFAULT 7,
+            backup_dir TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS backup_runs (
+            id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            file_path TEXT,
+            file_size_bytes INTEGER,
+            error_message TEXT
+        );
+        """,
+    ),
+    (
+        5,
+        """
+        ALTER TABLE transactions ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;
+        """,
+    ),
 ]
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def apply_migrations(data_file: Path) -> list[int]:
     """Apply all pending migrations to *data_file* and return applied versions.
@@ -70,6 +123,15 @@ def apply_migrations(data_file: Path) -> list[int]:
         for version, sql in sorted(MIGRATIONS, key=lambda m: m[0]):
             if version in applied:
                 continue
+            if version == 5:
+                _ensure_core_tables(connection)
+                if _column_exists(connection, "transactions", "verified"):
+                    connection.execute(
+                        "INSERT INTO schema_migrations (version) VALUES (?)",
+                        (version,),
+                    )
+                    newly_applied.append(version)
+                    continue
             connection.executescript(sql)
             connection.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?)",
@@ -98,10 +160,6 @@ def current_version(data_file: Path) -> int:
         return 0
 
 
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
 def _ensure_migrations_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
@@ -115,3 +173,55 @@ def _ensure_migrations_table(connection: sqlite3.Connection) -> None:
 def _applied_versions(connection: sqlite3.Connection) -> set[int]:
     rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
     return {int(row[0]) for row in rows}
+
+
+def _column_exists(connection: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row["name"] == column_name for row in rows)
+
+
+def _ensure_core_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS accounts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS payees (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            linked_account_id TEXT REFERENCES accounts(id)
+        );
+        CREATE TABLE IF NOT EXISTS categories (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS subcategories (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category_id TEXT NOT NULL REFERENCES categories(id)
+        );
+        CREATE TABLE IF NOT EXISTS transactions (
+            id TEXT PRIMARY KEY,
+            entry_type TEXT NOT NULL,
+            account_id TEXT NOT NULL REFERENCES accounts(id),
+            payee_id TEXT NOT NULL REFERENCES payees(id),
+            category_id TEXT NOT NULL REFERENCES categories(id),
+            subcategory_id TEXT REFERENCES subcategories(id),
+            amount TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            spent_on TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            linked_transaction_id TEXT,
+            transfer_group_id TEXT,
+            verified INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS attachments (
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id),
+            original_name TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL
+        );
+        """
+    )

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
+import io
 import os
 import secrets
 import shutil
@@ -8,19 +11,23 @@ import threading
 import tempfile
 from contextlib import contextmanager
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .auth import UserStore
+from .backup_scheduler import BackupScheduler
 from .cli import default_data_file
 from .config import AppConfig, load_app_config
 from .formatting import format_display_date, format_display_datetime, format_inr, format_list_date
+from .migrations import apply_migrations
 from .review_workflow import ReviewWorkflowStore
 from .sms_history import SmsHistoryStore
 from .tracker import ExpenseTracker
@@ -135,6 +142,100 @@ def normalize_return_to(return_to: str | None, default: str) -> str:
     return urlunsplit(("", "", path, split.query, split.fragment))
 
 
+def parse_checkbox(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def encode_cookie_value(value: str) -> str:
+    encoded = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
+    return f"b64:{encoded}"
+
+
+def decode_cookie_value(value: str | None) -> str | None:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None
+    if not raw_value.startswith("b64:"):
+        return raw_value
+    try:
+        return base64.urlsafe_b64decode(raw_value[4:].encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def normalize_csv_header(value: str) -> str:
+    return " ".join((value or "").strip().lower().replace("_", " ").split())
+
+
+def pick_csv_column(fieldnames: list[str], candidates: set[str]) -> str | None:
+    for fieldname in fieldnames:
+        if normalize_csv_header(fieldname) in candidates:
+            return fieldname
+    return None
+
+
+def parse_reconcile_date(raw_value: str) -> date:
+    value = raw_value.strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return date.fromisoformat(value)
+
+
+def parse_reconcile_amount(raw_value: str) -> Decimal:
+    normalized = raw_value.strip().replace(",", "").replace("₹", "")
+    if normalized.startswith("(") and normalized.endswith(")"):
+        normalized = f"-{normalized[1:-1]}"
+    return Decimal(normalized)
+
+
+def reconcile_statement_csv(current_tracker: ExpenseTracker, csv_bytes: bytes) -> dict[str, list[dict[str, object]]]:
+    text = csv_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    fieldnames = list(reader.fieldnames or [])
+    if not fieldnames:
+        raise ValueError("CSV file must include a header row.")
+    date_column = pick_csv_column(fieldnames, {"date", "transaction date", "posted date", "value date"})
+    amount_column = pick_csv_column(fieldnames, {"amount", "transaction amount"})
+    description_column = pick_csv_column(fieldnames, {"description", "narration", "particulars", "memo", "details"})
+    if date_column is None or amount_column is None:
+        raise ValueError("CSV file must include Date and Amount columns.")
+
+    indexed_transactions: dict[tuple[str, str], list] = {}
+    for transaction in current_tracker.list_transactions():
+        key = (transaction.spent_on.isoformat(), f"{transaction.amount.quantize(Decimal('0.01')):.2f}")
+        indexed_transactions.setdefault(key, []).append(transaction)
+
+    matched: list[dict[str, object]] = []
+    ambiguous: list[dict[str, object]] = []
+    unmatched: list[dict[str, object]] = []
+    for row in reader:
+        raw_date = str(row.get(date_column, "") or "").strip()
+        raw_amount = str(row.get(amount_column, "") or "").strip()
+        if not raw_date or not raw_amount:
+            continue
+        try:
+            parsed_date = parse_reconcile_date(raw_date)
+            parsed_amount = parse_reconcile_amount(raw_amount).quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError):
+            continue
+        csv_row = {
+            "date": parsed_date.isoformat(),
+            "amount": f"{parsed_amount:.2f}",
+            "description": str(row.get(description_column, "") or "").strip() if description_column else "",
+        }
+        candidates = indexed_transactions.get((csv_row["date"], csv_row["amount"]), [])
+        if len(candidates) == 1:
+            matched.append({"csv": csv_row, "transaction": serialize_transaction(candidates[0])})
+        elif len(candidates) > 1:
+            ambiguous.append({"csv": csv_row, "matches": [serialize_transaction(item) for item in candidates]})
+        else:
+            unmatched.append(csv_row)
+    return {"matched": matched, "ambiguous": ambiguous, "unmatched": unmatched}
+
+
 @contextmanager
 def saved_uploads(files: list[UploadFile]) -> Iterator[list[str]]:
     temp_paths: list[str] = []
@@ -169,6 +270,7 @@ def serialize_transaction(record) -> dict[str, object]:
         "spent_on": record.spent_on.isoformat(),
         "linked_transaction_id": record.linked_transaction_id,
         "transfer_group_id": record.transfer_group_id,
+        "verified": bool(record.verified),
         "attachments": [
             {"id": item.id, "name": item.original_name, "path": item.stored_path}
             for item in record.attachments
@@ -265,11 +367,21 @@ def create_app(
     app = FastAPI(title="Expense Tracker")
     app.state.data_file = data_file or default_data_file()
     app.state.config = config or load_app_config()
+    tracker_instance = ExpenseTracker(app.state.data_file)
+    tracker_instance.storage.load()
+    apply_migrations(app.state.data_file)
+    app.state.user_store = UserStore(app.state.data_file)
+    app.state.backup_scheduler = BackupScheduler(app.state.data_file)
+    app.state.backup_scheduler.start()
     if app.state.config.allowed_hosts != ("*",):
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(app.state.config.allowed_hosts))
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
     review_worker_lock = threading.Lock()
     review_worker: dict[str, threading.Thread | None] = {"thread": None}
+
+    @app.on_event("shutdown")
+    def stop_background_workers() -> None:
+        app.state.backup_scheduler.stop()
 
     def tracker() -> ExpenseTracker:
         return ExpenseTracker(app.state.data_file)
@@ -277,26 +389,91 @@ def create_app(
     def review_store() -> ReviewWorkflowStore:
         return ReviewWorkflowStore(app.state.data_file, config=app.state.config)
 
+    def user_store() -> UserStore:
+        return app.state.user_store
+
+    def backup_scheduler() -> BackupScheduler:
+        return app.state.backup_scheduler
+
+    def auth_mode() -> str:
+        return app.state.config.auth_mode
+
     def auth_token() -> str | None:
         return app.state.config.resolved_auth_token
 
-    def request_token(request: Request) -> str | None:
+    def request_bearer_token(request: Request) -> str | None:
         header = request.headers.get("authorization", "").strip()
         if header.lower().startswith("bearer "):
             return header[7:].strip() or None
-        cookie_name = app.state.config.cookie_name
-        cookie_value = request.cookies.get(cookie_name, "").strip()
+        return None
+
+    def request_cookie_raw(request: Request) -> str | None:
+        cookie_value = request.cookies.get(app.state.config.cookie_name, "").strip()
         return cookie_value or None
 
+    def request_cookie_token(request: Request) -> str | None:
+        return decode_cookie_value(request_cookie_raw(request))
+
+    def request_token(request: Request) -> str | None:
+        return request_bearer_token(request) or request_cookie_token(request)
+
+    def current_user_id(request: Request) -> str | None:
+        if auth_mode() != "password":
+            return None
+        bearer_token = request_bearer_token(request)
+        if bearer_token:
+            if bearer_token.startswith("et_"):
+                return user_store().validate_api_key(bearer_token)
+            return user_store().validate_session(bearer_token)
+        cookie_token = request_cookie_token(request)
+        if cookie_token:
+            return user_store().validate_session(cookie_token)
+        return None
+
+    def token_cookie_value() -> str | None:
+        expected = auth_token()
+        if not expected:
+            return None
+        return hashlib.sha256(expected.encode("utf-8")).hexdigest()
+
     def is_authorized(request: Request) -> bool:
+        if auth_mode() == "password":
+            return current_user_id(request) is not None
         expected = auth_token()
         if not expected:
             return True
-        provided = request_token(request)
-        return bool(provided) and secrets.compare_digest(provided, expected)
+        bearer_token = request_bearer_token(request)
+        if bearer_token and secrets.compare_digest(bearer_token, expected):
+            return True
+        cookie_value = request_cookie_raw(request)
+        expected_cookie = token_cookie_value()
+        return bool(cookie_value and expected_cookie) and secrets.compare_digest(cookie_value, expected_cookie)
 
     def is_exempt_path(path: str) -> bool:
-        return path.startswith("/static/") or path in {"/auth/login", "/auth/logout", "/healthz"}
+        return path.startswith("/static/") or path in {"/auth/login", "/auth/logout", "/auth/setup", "/healthz"}
+
+    def set_session_cookie(response: RedirectResponse, session_token: str) -> None:
+        response.set_cookie(
+            app.state.config.cookie_name,
+            encode_cookie_value(session_token),
+            httponly=True,
+            samesite="lax",
+            secure=app.state.config.secure_cookies,
+            max_age=app.state.config.cookie_max_age_seconds,
+        )
+
+    def set_static_auth_cookie(response: RedirectResponse) -> None:
+        cookie_value = token_cookie_value()
+        if cookie_value is None:
+            return
+        response.set_cookie(
+            app.state.config.cookie_name,
+            cookie_value,
+            httponly=True,
+            samesite="lax",
+            secure=app.state.config.secure_cookies,
+            max_age=app.state.config.cookie_max_age_seconds,
+        )
 
     @app.middleware("http")
     async def require_authentication(request: Request, call_next):
@@ -375,6 +552,8 @@ def create_app(
         if not app.state.config.auth_enabled:
             return RedirectResponse("/", status_code=303)
         normalized_next = normalize_return_to(next, "/")
+        if auth_mode() == "password" and user_store().user_count() == 0:
+            return RedirectResponse("/auth/setup", status_code=303)
         if is_authorized(request):
             return RedirectResponse(normalized_next, status_code=303)
         return TEMPLATES.TemplateResponse(
@@ -383,16 +562,41 @@ def create_app(
             {
                 "next": normalized_next,
                 "error": error,
+                "auth_mode": auth_mode(),
             },
             status_code=401 if error else 200,
         )
 
     @app.post("/auth/login")
-    def auth_login(request: Request, token: str = Form(""), next: str = Form("/")):
+    def auth_login(
+        request: Request,
+        token: str = Form(""),
+        username: str = Form(""),
+        password: str = Form(""),
+        next: str = Form("/"),
+    ):
         if not app.state.config.auth_enabled:
             return RedirectResponse("/", status_code=303)
-        expected = auth_token() or ""
         normalized_next = normalize_return_to(next, "/")
+        if auth_mode() == "password":
+            if user_store().user_count() == 0:
+                return RedirectResponse("/auth/setup", status_code=303)
+            user_id = user_store().authenticate(username, password)
+            if user_id is None:
+                return TEMPLATES.TemplateResponse(
+                    request,
+                    "login.html",
+                    {
+                        "next": normalized_next,
+                        "error": "Invalid username or password.",
+                        "auth_mode": auth_mode(),
+                    },
+                    status_code=401,
+                )
+            response = RedirectResponse(normalized_next, status_code=303)
+            set_session_cookie(response, user_store().create_session(user_id))
+            return response
+        expected = auth_token() or ""
         if not token or not secrets.compare_digest(token, expected):
             return TEMPLATES.TemplateResponse(
                 request,
@@ -400,22 +604,55 @@ def create_app(
                 {
                     "next": normalized_next,
                     "error": "Invalid token.",
+                    "auth_mode": auth_mode(),
                 },
                 status_code=401,
             )
         response = RedirectResponse(normalized_next, status_code=303)
-        response.set_cookie(
-            app.state.config.cookie_name,
-            token,
-            httponly=True,
-            samesite="lax",
-            secure=app.state.config.secure_cookies,
-            max_age=app.state.config.cookie_max_age_seconds,
+        set_static_auth_cookie(response)
+        return response
+
+    @app.get("/auth/setup")
+    def auth_setup_form(request: Request, error: str | None = None):
+        if auth_mode() != "password":
+            return RedirectResponse("/auth/login", status_code=303)
+        if user_store().user_count() > 0:
+            return RedirectResponse("/auth/login", status_code=303)
+        return TEMPLATES.TemplateResponse(
+            request,
+            "setup.html",
+            {"error": error},
+            status_code=400 if error else 200,
         )
+
+    @app.post("/auth/setup")
+    def auth_setup(
+        request: Request,
+        username: str = Form(""),
+        password: str = Form(""),
+        confirm_password: str = Form(""),
+    ):
+        if auth_mode() != "password":
+            return RedirectResponse("/auth/login", status_code=303)
+        if user_store().user_count() > 0:
+            return RedirectResponse("/auth/login", status_code=303)
+        if not username.strip() or not password:
+            error = "Username and password are required."
+        elif password != confirm_password:
+            error = "Passwords do not match."
+        else:
+            error = None
+        if error:
+            return TEMPLATES.TemplateResponse(request, "setup.html", {"error": error}, status_code=400)
+        user_id = user_store().create_user(username, password)
+        response = RedirectResponse("/", status_code=303)
+        set_session_cookie(response, user_store().create_session(user_id))
         return response
 
     @app.post("/auth/logout")
-    def auth_logout():
+    def auth_logout(request: Request):
+        if auth_mode() == "password":
+            user_store().delete_session(request_cookie_token(request) or "")
         response = RedirectResponse("/auth/login", status_code=303)
         response.delete_cookie(app.state.config.cookie_name)
         return response
@@ -771,6 +1008,21 @@ def create_app(
             )
         return RedirectResponse(normalized_return_to, status_code=303)
 
+    @app.post("/transactions/{transaction_id}/verify")
+    async def verify_transaction(
+        request: Request,
+        transaction_id: str,
+        return_to: str = Form("/transactions"),
+    ):
+        try:
+            verified = tracker().toggle_verified(transaction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        accepts_json = "application/json" in request.headers.get("accept", "")
+        if accepts_json:
+            return {"verified": verified}
+        return RedirectResponse(normalize_return_to(return_to, "/transactions"), status_code=303)
+
     @app.post("/transactions/bulk")
     async def bulk_transactions(
         action: str = Form(...),
@@ -819,6 +1071,147 @@ def create_app(
     @app.get("/manage")
     def manage_index(request: Request):
         return TEMPLATES.TemplateResponse(request, "manage_index.html", navigation_context(request))
+
+    @app.get("/manage/security")
+    def manage_security(request: Request, error: str | None = None):
+        created_api_key = request.cookies.get(f"{app.state.config.cookie_name}_new_api_key")
+        response = TEMPLATES.TemplateResponse(
+            request,
+            "manage_security.html",
+            {
+                "available": auth_mode() == "password",
+                "api_keys": user_store().list_api_keys(current_user_id(request) or "") if auth_mode() == "password" else [],
+                "created_api_key": created_api_key,
+                "error": error,
+                **navigation_context(request),
+            },
+        )
+        if created_api_key:
+            response.delete_cookie(f"{app.state.config.cookie_name}_new_api_key")
+        return response
+
+    @app.post("/manage/security/api-keys")
+    def manage_security_create_api_key(request: Request, name: str = Form("")):
+        if auth_mode() != "password":
+            return RedirectResponse("/manage/security", status_code=303)
+        user_id = current_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        try:
+            raw_key, _ = user_store().create_api_key(user_id, name)
+        except ValueError as exc:
+            return RedirectResponse(f"/manage/security?error={exc}", status_code=303)
+        response = RedirectResponse("/manage/security", status_code=303)
+        response.set_cookie(
+            f"{app.state.config.cookie_name}_new_api_key",
+            raw_key,
+            httponly=True,
+            samesite="lax",
+            secure=app.state.config.secure_cookies,
+            max_age=120,
+        )
+        return response
+
+    @app.post("/manage/security/api-keys/{key_id}/delete")
+    def manage_security_delete_api_key(request: Request, key_id: str):
+        if auth_mode() != "password":
+            return RedirectResponse("/manage/security", status_code=303)
+        user_id = current_user_id(request)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        user_store().delete_api_key(key_id, user_id)
+        return RedirectResponse("/manage/security", status_code=303)
+
+    @app.get("/manage/backups")
+    def manage_backups(request: Request, error: str | None = None, message: str | None = None):
+        return TEMPLATES.TemplateResponse(
+            request,
+            "manage_backups.html",
+            {
+                "settings": backup_scheduler().get_settings(),
+                "runs": backup_scheduler().list_runs(),
+                "error": error,
+                "message": message,
+                **navigation_context(request),
+            },
+        )
+
+    @app.post("/manage/backups/settings")
+    def manage_backups_settings(
+        enabled: str | None = Form(None),
+        interval_hours: int = Form(24),
+        retention_count: int = Form(7),
+        backup_dir: str = Form(""),
+    ):
+        backup_scheduler().save_settings(
+            enabled=parse_checkbox(enabled),
+            interval_hours=max(1, int(interval_hours)),
+            retention_count=max(0, int(retention_count)),
+            backup_dir=backup_dir.strip(),
+        )
+        return RedirectResponse("/manage/backups?message=Backup+settings+saved.", status_code=303)
+
+    @app.post("/manage/backups/run")
+    def manage_backups_run():
+        result = backup_scheduler().run_backup()
+        if result["status"] == "success":
+            return RedirectResponse("/manage/backups?message=Backup+completed+successfully.", status_code=303)
+        return RedirectResponse(f"/manage/backups?error={result['error']}", status_code=303)
+
+    @app.get("/manage/reconcile")
+    def manage_reconcile(request: Request, error: str | None = None, message: str | None = None):
+        return TEMPLATES.TemplateResponse(
+            request,
+            "manage_reconcile.html",
+            {
+                "results": None,
+                "error": error,
+                "message": message,
+                **navigation_context(request),
+            },
+        )
+
+    @app.post("/manage/reconcile")
+    async def manage_reconcile_post(
+        request: Request,
+        action: str = Form("upload"),
+        transaction_ids: list[str] = Form(default=[]),
+        file: UploadFile | None = File(default=None),
+    ):
+        current_tracker = tracker()
+        if action == "verify_matched":
+            verified_count = 0
+            for transaction_id in transaction_ids:
+                try:
+                    current_tracker.set_verified(transaction_id, True)
+                    verified_count += 1
+                except ValueError:
+                    continue
+            return RedirectResponse(f"/manage/reconcile?message=Verified+{verified_count}+transactions.", status_code=303)
+        if file is None or not file.filename:
+            return RedirectResponse("/manage/reconcile?error=Choose+a+CSV+file.", status_code=303)
+        try:
+            results = reconcile_statement_csv(current_tracker, await file.read())
+        except ValueError as exc:
+            return TEMPLATES.TemplateResponse(
+                request,
+                "manage_reconcile.html",
+                {"results": None, "error": str(exc), "message": None, **navigation_context(request)},
+                status_code=400,
+            )
+        finally:
+            if file is not None:
+                file.file.close()
+        return TEMPLATES.TemplateResponse(
+            request,
+            "manage_reconcile.html",
+            {
+                "results": results,
+                "error": None,
+                "message": None,
+                **navigation_context(request),
+            },
+        )
 
     @app.get("/manage/data")
     def manage_data(request: Request, error: str | None = None, message: str | None = None):
@@ -1072,6 +1465,17 @@ def create_app(
         start_review_worker()
         stored_review = current_review_store.get_review(review.id) or review
         return {"review": stored_review.to_dict(), "queue": current_review_store.queue_counts()}
+
+    @app.post("/api/transactions/reconcile")
+    async def api_reconcile_transactions(file: UploadFile = File(...)):
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Choose a CSV file.")
+        try:
+            return reconcile_statement_csv(tracker(), await file.read())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            file.file.close()
 
     @app.get("/api/transactions")
     def api_transactions(

@@ -3,7 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#2667ff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>{% block title %}Expense Tracker{% endblock %}</title>
+    <link rel="manifest" href="/static/manifest.json">
     <link rel="stylesheet" href="/static/styles.css?v={{ static_ver }}">
     <script src="/static/app.js?v={{ static_ver }}" defer></script>
   </head>
@@ -34,5 +37,10 @@
       </nav>
     </aside>
     <main class="page-shell">{% block content %}{% endblock %}</main>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/sw.js');
+      }
+    </script>
   </body>
 </html>

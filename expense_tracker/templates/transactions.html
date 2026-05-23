@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Transactions · Expense Tracker{% endblock %}
 {% block content %}
-<section class="page-head compact-head">
+<section class="page-head compact-head compact-head-row">
   <div>
     <h1>Transactions</h1>
     {% if filters.account %}<div class="inline-chip">{{ filters.account }}</div>{% endif %}
   </div>
+  <a class="button compact-button" href="/manage/reconcile">Reconcile</a>
 </section>
 {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 <form class="search-bar" method="get">
@@ -62,6 +63,10 @@
               <label class="transaction-select-control" aria-label="Select transaction {{ transaction.payee_name }}">
                 <input type="checkbox" data-selection-checkbox>
               </label>
+              <form method="post" action="/transactions/{{ transaction.id }}/verify" class="inline-action-form" data-verify-form>
+                <input type="hidden" name="return_to" value="{{ current_url }}">
+                <button class="verified-badge {% if not transaction.verified %}unverified{% endif %}" type="submit" data-verify-button aria-label="Toggle verification for {{ transaction.payee_name }}">✓</button>
+              </form>
               <div class="transaction-main-text">
                 <strong class="transaction-primary">{{ transaction.payee_name }}</strong>
                 <div class="transaction-meta">{{ transaction.account_name }} · {{ transaction.category_name }}{% if transaction.subcategory_name %} / {{ transaction.subcategory_name }}{% endif %}</div>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Set up account · Expense Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="page-head compact-head compact-head-row">
+        <h1>Create your account</h1>
+      </section>
+      {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+      <form class="stack-form card-form compact-form" method="post" action="/auth/setup">
+        <label>Username</label>
+        <input name="username" autocomplete="username" autofocus required>
+        <label>Password</label>
+        <input name="password" type="password" autocomplete="new-password" required>
+        <label>Confirm password</label>
+        <input name="confirm_password" type="password" autocomplete="new-password" required>
+        <button class="button primary compact-button" type="submit">Create account</button>
+      </form>
+    </main>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from .migrations import apply_migrations
 from .models import Attachment, Category, LedgerData, Payee, Subcategory, Transaction
 from .sqlite_utils import sqlite_connection
 
@@ -49,7 +50,7 @@ class LedgerStorage:
                     connection,
                     """
                     SELECT id, entry_type, account_id, payee_id, category_id, subcategory_id,
-                           amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id
+                           amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id, verified
                     FROM transactions
                     ORDER BY rowid
                     """,
@@ -98,8 +99,8 @@ class LedgerStorage:
                     """
                     INSERT INTO transactions (
                         id, entry_type, account_id, payee_id, category_id, subcategory_id,
-                        amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        amount, notes, spent_on, created_at, linked_transaction_id, transfer_group_id, verified
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -115,6 +116,7 @@ class LedgerStorage:
                             transaction.created_at.isoformat(),
                             transaction.linked_transaction_id,
                             transaction.transfer_group_id,
+                            int(transaction.verified),
                         )
                         for transaction in ledger.transactions
                     ],
@@ -172,7 +174,8 @@ class LedgerStorage:
                     spent_on TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     linked_transaction_id TEXT,
-                    transfer_group_id TEXT
+                    transfer_group_id TEXT,
+                    verified INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS attachments (
                     id TEXT PRIMARY KEY,
@@ -183,6 +186,7 @@ class LedgerStorage:
                 );
                 """
             )
+        apply_migrations(self.data_file)
         if legacy_ledger is not None:
             self.save(legacy_ledger)
 
@@ -251,6 +255,7 @@ class LedgerStorage:
                 "created_at": row["created_at"],
                 "linked_transaction_id": row["linked_transaction_id"],
                 "transfer_group_id": row["transfer_group_id"],
+                "verified": row["verified"],
             }
         )
 

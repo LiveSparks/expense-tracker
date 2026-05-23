@@ -121,6 +121,7 @@ class Transaction:
     created_at: datetime
     linked_transaction_id: str | None = None
     transfer_group_id: str | None = None
+    verified: bool = False
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -136,6 +137,7 @@ class Transaction:
             "created_at": self.created_at.isoformat(),
             "linked_transaction_id": self.linked_transaction_id,
             "transfer_group_id": self.transfer_group_id,
+            "verified": int(self.verified),
         }
 
     @classmethod
@@ -165,6 +167,7 @@ class Transaction:
                 if payload.get("transfer_group_id") is not None
                 else None
             ),
+            verified=bool(int(payload.get("verified", 0) or 0)),
         )
 
 
@@ -213,6 +216,7 @@ class TransactionRecord:
     created_at: datetime
     linked_transaction_id: str | None
     transfer_group_id: str | None
+    verified: bool
     attachments: list[Attachment]
 
 

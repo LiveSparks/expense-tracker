@@ -43,6 +43,11 @@ def _parse_int(value: str | None, *, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _parse_auth_mode(value: str | None) -> str:
+    normalized = (value or "token").strip().lower()
+    return normalized if normalized in {"token", "password"} else "token"
+
+
 def _secret_from_sources(
     *,
     direct_value: str | None,
@@ -73,6 +78,7 @@ class AppConfig:
     openai_api_key_file: Path | None = None
     auth_token: str | None = None
     auth_token_file: Path | None = None
+    auth_mode: str = "token"
     secure_cookies: bool = False
     cookie_name: str = "expense_tracker_auth"
     cookie_max_age_seconds: int = 60 * 60 * 24 * 90
@@ -95,7 +101,7 @@ class AppConfig:
 
     @property
     def auth_enabled(self) -> bool:
-        return bool(self.resolved_auth_token)
+        return self.auth_mode == "password" or bool(self.resolved_auth_token)
 
 
 def load_app_config(environ: Mapping[str, str] | None = None) -> AppConfig:
@@ -105,6 +111,7 @@ def load_app_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         openai_api_key_file=_parse_path(env.get("EXPENSE_TRACKER_OPENAI_API_KEY_FILE")),
         auth_token=env.get("EXPENSE_TRACKER_AUTH_TOKEN"),
         auth_token_file=_parse_path(env.get("EXPENSE_TRACKER_AUTH_TOKEN_FILE")),
+        auth_mode=_parse_auth_mode(env.get("EXPENSE_TRACKER_AUTH_MODE")),
         secure_cookies=_parse_bool(env.get("EXPENSE_TRACKER_SECURE_COOKIES"), default=False),
         cookie_name=(env.get("EXPENSE_TRACKER_COOKIE_NAME") or "expense_tracker_auth").strip() or "expense_tracker_auth",
         cookie_max_age_seconds=_parse_int(env.get("EXPENSE_TRACKER_COOKIE_MAX_AGE_SECONDS"), default=60 * 60 * 24 * 90),

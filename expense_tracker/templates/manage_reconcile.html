@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Reconcile · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head">
+  <h1>Reconcile CSV statement</h1>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+{% if message %}<div class="success-banner">{{ message }}</div>{% endif %}
+<section class="card-form compact-form stack-form">
+  <form class="stack-form" method="post" action="/manage/reconcile" enctype="multipart/form-data">
+    <label>Statement CSV</label>
+    <input type="file" name="file" accept=".csv,text/csv" required>
+    <button class="button primary compact-button" type="submit">Upload and reconcile</button>
+  </form>
+</section>
+{% if results %}
+  <section class="summary-strip compact-summary">
+    <span>{{ results.matched|length }} matched</span>
+    <span>{{ results.ambiguous|length }} ambiguous</span>
+    <span>{{ results.unmatched|length }} unmatched</span>
+  </section>
+  {% if results.matched %}
+    <section class="card-form compact-form stack-form">
+      <div class="hero-row"><h2>Matched</h2></div>
+      <form method="post" action="/manage/reconcile" class="stack-form">
+        <input type="hidden" name="action" value="verify_matched">
+        {% for item in results.matched %}<input type="hidden" name="transaction_ids" value="{{ item.transaction.id }}">{% endfor %}
+        <button class="button primary compact-button" type="submit">Verify all matched</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>CSV</th><th>Transaction</th><th></th></tr></thead>
+          <tbody>
+            {% for item in results.matched %}
+              <tr>
+                <td>{{ item.csv.date }} · {{ item.csv.amount }}{% if item.csv.description %} · {{ item.csv.description }}{% endif %}</td>
+                <td>{{ item.transaction.payee_name }} · {{ item.transaction.account_name }}</td>
+                <td>
+                  <form method="post" action="/transactions/{{ item.transaction.id }}/verify" data-verify-form>
+                    <input type="hidden" name="return_to" value="/manage/reconcile">
+                    <button class="verified-badge {% if not item.transaction.verified %}unverified{% endif %}" type="submit" data-verify-button aria-label="Toggle verification">✓</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+  <section class="card-grid dense-grid">
+    <article class="card-form compact-form stack-form">
+      <h2>Ambiguous</h2>
+      {% if results.ambiguous %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>CSV row</th><th>Possible matches</th></tr></thead>
+            <tbody>
+              {% for item in results.ambiguous %}
+                <tr>
+                  <td>{{ item.csv.date }} · {{ item.csv.amount }}{% if item.csv.description %} · {{ item.csv.description }}{% endif %}</td>
+                  <td>{% for match in item.matches %}<div>{{ match.payee_name }} · {{ match.account_name }}</div>{% endfor %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-card">No ambiguous matches.</div>
+      {% endif %}
+    </article>
+    <article class="card-form compact-form stack-form">
+      <h2>Unmatched</h2>
+      {% if results.unmatched %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Amount</th><th>Description</th><th></th></tr></thead>
+            <tbody>
+              {% for row in results.unmatched %}
+                <tr>
+                  <td>{{ row.date }}</td>
+                  <td>{{ row.amount }}</td>
+                  <td>{{ row.description or '—' }}</td>
+                  <td><a class="button compact-button" href="/transactions/new">Review manually</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-card">No unmatched rows.</div>
+      {% endif %}
+    </article>
+  </section>
+{% endif %}
+{% endblock %}

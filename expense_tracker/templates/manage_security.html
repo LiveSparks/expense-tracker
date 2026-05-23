@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Security · Expense Tracker{% endblock %}
+{% block content %}
+<section class="page-head compact-head">
+  <h1>Security</h1>
+</section>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+{% if created_api_key %}
+  <div class="success-banner">
+    <strong>New API key</strong>
+    <div class="api-key-reveal">{{ created_api_key }}</div>
+    <div class="muted">Copy it now. This value is shown only once.</div>
+  </div>
+{% endif %}
+{% if not available %}
+  <div class="empty-card">Security management is available only in password auth mode.</div>
+{% else %}
+  <section class="card-grid dense-grid">
+    <article class="card-form compact-form stack-form">
+      <h2>Create API key</h2>
+      <form class="stack-form" method="post" action="/manage/security/api-keys">
+        <label>Name</label>
+        <input name="name" placeholder="Automation" required>
+        <button class="button primary compact-button" type="submit">Create key</button>
+      </form>
+    </article>
+    <article class="card-form compact-form stack-form">
+      <h2>API keys</h2>
+      {% if api_keys %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Prefix</th><th>Created</th><th>Last used</th><th></th></tr>
+            </thead>
+            <tbody>
+              {% for api_key in api_keys %}
+                <tr>
+                  <td>{{ api_key.name }}</td>
+                  <td><code>{{ api_key.key_prefix }}</code></td>
+                  <td>{{ api_key.created_at|display_datetime }}</td>
+                  <td>{{ api_key.last_used_at|display_datetime if api_key.last_used_at else 'Never' }}</td>
+                  <td>
+                    <form method="post" action="/manage/security/api-keys/{{ api_key.id }}/delete">
+                      <button class="button compact-button danger" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-card">No API keys yet.</div>
+      {% endif %}
+    </article>
+  </section>
+{% endif %}
+{% endblock %}
